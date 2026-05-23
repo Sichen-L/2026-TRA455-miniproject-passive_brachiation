@@ -16,12 +16,12 @@ from .shooting import (
     StrideMap,
     continue_fixed_point_branch,
     evaluate_elbow_below_slope_section,
-    ik_from_stride_distance,
+    evaluate_passive_brachiation_stride,
     make_iterated_stride_map,
     make_passive_brachiation_feasibility_check,
     make_passive_brachiation_stride_map,
 )
-from .simulation import simulate
+from .simulation import SimulationSample
 from .switching import CollisionMode, SwitchDecision
 
 
@@ -138,23 +138,39 @@ def validate_com_point(
     local_model = TwoLinkBrachiationModel(
         parameters_with_symmetric_com_offset(com_offset, base_params)
     )
-    q0 = ik_from_stride_distance(
-        d_value,
-        slope=slope,
-        parameters=local_model.p,
-        direction=initial_direction,
-        branch=branch,
-    )
-    samples = simulate(
+    evaluation = evaluate_passive_brachiation_stride(
         model=local_model,
         slope=slope,
-        initial_state=BrachiationState(q=q0, qd=np.zeros(2), support_index=0),
-        initial_support_point=support,
-        duration=t_max,
+        x=np.array([d_value], dtype=float),
         dt=dt,
-        switch_policy=switch_policy or always_switch_policy,
+        t_max=t_max,
         collision_mode=collision_mode,
+        initial_direction=initial_direction,
+        impact_direction=impact_direction,
+        branch=branch,
+        support_point=support,
+        switch_policy=switch_policy or always_switch_policy,
     )
+    return _validate_com_samples(
+        evaluation.samples,
+        slope=slope,
+        period=period,
+        support=support,
+        impact_direction=impact_direction,
+        legality_tolerance=legality_tolerance,
+    )
+
+
+def _validate_com_samples(
+    samples: list[SimulationSample],
+    slope: Slope,
+    period: int,
+    support: np.ndarray,
+    impact_direction: float,
+    legality_tolerance: float,
+) -> ComValidation:
+    """Validate a COM continuation point from an already-run trajectory."""
+
     rel_indices = release_indices(samples)
     if len(rel_indices) < period:
         return ComValidation(False, np.nan, np.nan, np.array([], dtype=float))
@@ -262,28 +278,33 @@ def run_symmetric_com_continuation(
             )
 
             if point.converged:
-                P_base = make_base_stride_map(point.parameter)
-                d_next = float(P_base(np.array([d_value], dtype=float))[0])
+                evaluation = evaluate_passive_brachiation_stride(
+                    model=make_model(point.parameter),
+                    slope=slope,
+                    x=np.array([d_value], dtype=float),
+                    dt=dt,
+                    t_max=t_max,
+                    collision_mode=collision_mode,
+                    initial_direction=initial_direction,
+                    impact_direction=impact_direction,
+                    branch=branch,
+                    support_point=support,
+                    switch_policy=policy,
+                )
+                d_next = float(evaluation.p_of_x[0])
                 stride_plot = d_value if period == 1 else 0.5 * (d_value + d_next)
                 eigen_real = (
                     float(np.real(point.eigenvalues[0]))
                     if point.eigenvalues is not None
                     else np.nan
                 )
-                validation = validate_com_point(
-                    point.parameter,
-                    d_value,
-                    base_params=base_params,
+                validation = _validate_com_samples(
+                    evaluation.samples,
                     slope=slope,
-                    branch=branch,
                     period=period,
-                    dt=dt,
-                    t_max=t_max,
-                    initial_support_point=support,
-                    initial_direction=initial_direction,
+                    support=support,
                     impact_direction=impact_direction,
-                    switch_policy=policy,
-                    collision_mode=collision_mode,
+                    legality_tolerance=1e-9,
                 )
             else:
                 d_next = np.nan

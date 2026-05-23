@@ -1017,6 +1017,11 @@ def evaluate_passive_brachiation_stride(
     impact_direction: float = 1.0,
     branch: str = "positive",
     support_point: Iterable[float] | None = None,
+    switch_policy: Callable[
+        [float, BrachiationState, np.ndarray, np.ndarray, Slope],
+        SwitchDecision,
+    ]
+    | None = None,
     direction: float | None = None,
 ) -> StrideMapEvaluation:
     """Evaluate one passive-brachiation stride and keep the trajectory."""
@@ -1047,7 +1052,7 @@ def evaluate_passive_brachiation_stride(
         initial_support_point=base_support,
         duration=t_max,
         dt=dt,
-        switch_policy=lambda *_args: SwitchDecision.SWITCH,
+        switch_policy=switch_policy or (lambda *_args: SwitchDecision.SWITCH),
         collision_mode=collision_mode,
         collision_model=collision_model,
     )
