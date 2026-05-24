@@ -14,6 +14,7 @@ from .policies import always_switch_policy
 from .shooting import (
     ContinuationResult,
     StrideMap,
+    continue_fixed_point_branch_adaptive,
     continue_fixed_point_branch,
     evaluate_elbow_below_slope_section,
     evaluate_passive_brachiation_stride,
@@ -60,6 +61,9 @@ class ComContinuationRow:
     min_elbow_distance: float
     release_stride: np.ndarray
     failure_reason: str | None
+    parameter_step: float | None = None
+    fold_indicator: float | None = None
+    fold_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,9 +95,9 @@ def parameters_with_symmetric_com_offset(
     """Move both link COMs symmetrically while keeping masses and inertias fixed."""
 
     lc1_fraction, lc2_fraction = com_fractions_from_offset(com_offset, center_fraction)
-    if not (0.0 < lc1_fraction < 1.0 and 0.0 < lc2_fraction < 1.0):
+    if not (0.0 <= lc1_fraction <= 1.0 and 0.0 <= lc2_fraction <= 1.0):
         raise ValueError(
-            "COM fractions must stay inside (0, 1); "
+            "COM fractions must stay inside [0, 1]; "
             f"got lc1/L1={lc1_fraction:.3f}, lc2/L2={lc2_fraction:.3f}"
         )
 
@@ -150,6 +154,7 @@ def validate_com_point(
         branch=branch,
         support_point=support,
         switch_policy=switch_policy or always_switch_policy,
+        stop_after_releases=max(1, period),
     )
     return _validate_com_samples(
         evaluation.samples,
@@ -215,6 +220,13 @@ def run_symmetric_com_continuation(
     continuation_delta: float = 1e-5,
     continuation_damping: float = 0.8,
     center_fraction: float = 0.5,
+    adaptive_steps: bool = False,
+    adaptive_initial_step: float | None = None,
+    adaptive_min_step: float = 1e-4,
+    adaptive_max_step: float | None = None,
+    adaptive_step_growth: float = 1.35,
+    adaptive_step_shrink: float = 0.5,
+    fold_tolerance: float = 7.5e-2,
 ) -> SymmetricComContinuation:
     """Trace fixed points as COMs move toward contact endpoints and elbow."""
 
@@ -256,19 +268,40 @@ def run_symmetric_com_continuation(
         return make_passive_brachiation_feasibility_check(base_params, dim=1)
 
     def run_one(offsets: np.ndarray, label: str) -> tuple[ContinuationResult, list[ComContinuationRow]]:
-        result = continue_fixed_point_branch(
-            P_factory=make_stride_map,
-            parameters=offsets,
-            x0=np.array([d_fixed], dtype=float),
-            dim=1,
-            feasibility_factory=make_feasibility,
-            tol=continuation_tol,
-            max_iter=continuation_max_iter,
-            delta=continuation_delta,
-            damping=continuation_damping,
-            compute_stability=True,
-            stop_on_failure=True,
-        )
+        if adaptive_steps:
+            result = continue_fixed_point_branch_adaptive(
+                P_factory=make_stride_map,
+                start_parameter=float(offsets[0]),
+                target_parameter=float(offsets[-1]),
+                x0=np.array([d_fixed], dtype=float),
+                dim=1,
+                feasibility_factory=make_feasibility,
+                tol=continuation_tol,
+                max_iter=continuation_max_iter,
+                delta=continuation_delta,
+                damping=continuation_damping,
+                compute_stability=True,
+                initial_step=adaptive_initial_step,
+                min_step=adaptive_min_step,
+                max_step=adaptive_max_step,
+                step_growth=adaptive_step_growth,
+                step_shrink=adaptive_step_shrink,
+                fold_tolerance=fold_tolerance,
+            )
+        else:
+            result = continue_fixed_point_branch(
+                P_factory=make_stride_map,
+                parameters=offsets,
+                x0=np.array([d_fixed], dtype=float),
+                dim=1,
+                feasibility_factory=make_feasibility,
+                tol=continuation_tol,
+                max_iter=continuation_max_iter,
+                delta=continuation_delta,
+                damping=continuation_damping,
+                compute_stability=True,
+                stop_on_failure=True,
+            )
         rows: list[ComContinuationRow] = []
         for point in result.points:
             d_value = float(point.x[0])
@@ -290,6 +323,7 @@ def run_symmetric_com_continuation(
                     branch=branch,
                     support_point=support,
                     switch_policy=policy,
+                    stop_after_releases=max(1, period),
                 )
                 d_next = float(evaluation.p_of_x[0])
                 stride_plot = d_value if period == 1 else 0.5 * (d_value + d_next)
@@ -335,6 +369,9 @@ def run_symmetric_com_continuation(
                     min_elbow_distance=validation.min_elbow_distance,
                     release_stride=validation.release_stride,
                     failure_reason=point.failure_reason,
+                    parameter_step=point.parameter_step,
+                    fold_indicator=point.fold_indicator,
+                    fold_candidate=point.fold_candidate,
                 )
             )
 

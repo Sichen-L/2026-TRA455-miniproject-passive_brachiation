@@ -83,17 +83,30 @@ def simulate(
     leave_tol: float = 1e-3,
     initial_geometry_tolerance: float = 1e-6,
     require_initial_below_slope: bool = True,
+    stop_after_releases: int | None = None,
+    impact_root_tolerance: float = 1e-10,
+    impact_root_max_iterations: int = 50,
 ) -> list[SimulationSample]:
     """Run a fixed-step simulation with slope-contact guards.
 
     ``collision_model`` is the extension point for a future 2-D shooting impact
     map.  When it is omitted, ``collision_mode`` selects one of the built-in
     collision handlers.
+
+    Passing ``stop_after_releases`` returns as soon as that many release
+    samples have been recorded.  This is useful for stride maps, which only
+    need the first section return instead of a full free-run trajectory.
     """
     if dt <= 0.0:
         raise ValueError("dt must be positive.")
     if duration < 0.0:
         raise ValueError("duration must be non-negative.")
+    if stop_after_releases is not None and stop_after_releases < 1:
+        raise ValueError("stop_after_releases must be positive when provided.")
+    if impact_root_tolerance <= 0.0:
+        raise ValueError("impact_root_tolerance must be positive.")
+    if impact_root_max_iterations < 1:
+        raise ValueError("impact_root_max_iterations must be positive.")
 
     torque_policy = torque_policy or (lambda _t, _s: 0.0)
     endpoint_force_policy = endpoint_force_policy or (
@@ -125,6 +138,7 @@ def simulate(
 
     samples: list[SimulationSample] = []
     has_left_slope = initial_free_distance < -leave_tol
+    release_count = 0
 
     def _record(
         time: float,
@@ -192,6 +206,20 @@ def simulate(
         )
         time_next = time + dt
 
+        def _state_at_fraction(alpha: float) -> BrachiationState:
+            alpha = float(np.clip(alpha, 0.0, 1.0))
+            if alpha <= 0.0:
+                return state
+            if alpha >= 1.0:
+                return state_next
+            return model.step_rk4(
+                state,
+                dt=alpha * dt,
+                elbow_torque=elbow_torque,
+                external_endpoint_force_yz=endpoint_force,
+                external_generalized_force=generalized_force,
+            )
+
         impact, has_left_slope = detect_slope_impact(
             state_prev=state,
             state_curr=state_next,
@@ -202,11 +230,19 @@ def simulate(
             t_curr=time_next,
             has_left_slope=has_left_slope,
             leave_tol=leave_tol,
+            state_at_fraction=_state_at_fraction,
+            root_tolerance=impact_root_tolerance,
+            root_max_iterations=impact_root_max_iterations,
         )
 
         if impact.contact_occurred:
-            alpha = (impact.impact_time - time) / (time_next - time)
-            qd_impact = state.qd + alpha * (state_next.qd - state.qd)
+            qd_impact = (
+                impact.impact_velocity.copy()
+                if impact.impact_velocity is not None
+                else state.qd
+                + ((impact.impact_time - time) / (time_next - time))
+                * (state_next.qd - state.qd)
+            )
             impact_state = BrachiationState(
                 q=impact.impact_state.copy(),
                 qd=qd_impact,
@@ -279,6 +315,13 @@ def simulate(
                 np.zeros(2),
                 np.zeros(2),
             )
+            if record_phase == SimPhase.RELEASE:
+                release_count += 1
+                if (
+                    stop_after_releases is not None
+                    and release_count >= stop_after_releases
+                ):
+                    break
             has_left_slope = False
             continue
 

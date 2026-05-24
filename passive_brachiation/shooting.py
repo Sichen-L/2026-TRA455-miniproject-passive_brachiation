@@ -115,6 +115,9 @@ class ContinuationPoint:
     eigenvalues: np.ndarray | None
     jacobian: np.ndarray | None
     failure_reason: str | None = None
+    parameter_step: float | None = None
+    fold_indicator: float | None = None
+    fold_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,37 @@ class ContinuationResult:
     points: list[ContinuationPoint]
     stopped_early: bool
     stop_reason: str | None = None
+    fold_detected: bool = False
+    fold_parameter: float | None = None
+
+
+def _fold_indicator_from_eigenvalues(eigenvalues: np.ndarray | None) -> float | None:
+    """Return distance to the natural-continuation fold condition."""
+    if eigenvalues is None or eigenvalues.size == 0:
+        return None
+    return float(np.min(np.abs(eigenvalues - 1.0)))
+
+
+def _make_continuation_failure_point(
+    parameter: float,
+    x: np.ndarray,
+    reason: str,
+    parameter_step: float | None = None,
+) -> ContinuationPoint:
+    return ContinuationPoint(
+        parameter=float(parameter),
+        x=x.copy(),
+        p_of_x=None,
+        residual=None,
+        residual_norm=float("inf"),
+        converged=False,
+        iterations=0,
+        spectral_radius=None,
+        eigenvalues=None,
+        jacobian=None,
+        failure_reason=reason,
+        parameter_step=parameter_step,
+    )
 
 
 def _as_vector(x: Iterable[float], dim: int | None = None) -> np.ndarray:
@@ -302,6 +336,7 @@ def continue_fixed_point_branch(
                 )
                 eigenvalues = np.linalg.eigvals(jacobian)
                 spectral_radius = float(np.max(np.abs(eigenvalues)))
+            fold_indicator = _fold_indicator_from_eigenvalues(eigenvalues)
 
             points.append(
                 ContinuationPoint(
@@ -315,6 +350,10 @@ def continue_fixed_point_branch(
                     spectral_radius=spectral_radius,
                     eigenvalues=eigenvalues,
                     jacobian=jacobian,
+                    fold_indicator=fold_indicator,
+                    fold_candidate=bool(
+                        fold_indicator is not None and fold_indicator <= 7.5e-2
+                    ),
                 )
             )
             if not result.converged or residual_norm > tol:
@@ -333,18 +372,10 @@ def continue_fixed_point_branch(
 
         except Exception as exc:
             points.append(
-                ContinuationPoint(
+                _make_continuation_failure_point(
                     parameter=parameter,
-                    x=x_current.copy(),
-                    p_of_x=None,
-                    residual=None,
-                    residual_norm=float("inf"),
-                    converged=False,
-                    iterations=0,
-                    spectral_radius=None,
-                    eigenvalues=None,
-                    jacobian=None,
-                    failure_reason=str(exc),
+                    x=x_current,
+                    reason=str(exc),
                 )
             )
             if stop_on_failure:
@@ -355,6 +386,205 @@ def continue_fixed_point_branch(
                 )
 
     return ContinuationResult(points=points, stopped_early=False)
+
+
+def continue_fixed_point_branch_adaptive(
+    P_factory: ParameterizedStrideMapFactory,
+    start_parameter: float,
+    target_parameter: float,
+    x0: Iterable[float],
+    dim: int | None = None,
+    feasibility_factory: ParameterizedFeasibilityFactory | None = None,
+    tol: float = 1e-7,
+    max_iter: int = 5,
+    delta: float = 1e-6,
+    damping: float = 1.0,
+    compute_stability: bool = True,
+    initial_step: float | None = None,
+    min_step: float = 1e-4,
+    max_step: float | None = None,
+    step_growth: float = 1.35,
+    step_shrink: float = 0.5,
+    easy_iterations: int = 3,
+    hard_iterations: int = 8,
+    fold_tolerance: float = 7.5e-2,
+) -> ContinuationResult:
+    """Trace a natural-parameter branch with adaptive step size.
+
+    This remains natural continuation: each accepted fixed point warm-starts
+    Newton at the next parameter value.  Failed attempts are retried with a
+    smaller parameter step until ``min_step`` is reached.  Fold candidates are
+    detected from the fixed-point stability Jacobian via
+    ``min(abs(eig(J_P) - 1))``; at a saddle-node/fold, ``J_P - I`` becomes
+    singular, so one eigenvalue of ``J_P`` approaches ``+1``.
+    """
+
+    start = float(start_parameter)
+    target = float(target_parameter)
+    if start == target:
+        raise ValueError("start_parameter and target_parameter must differ.")
+    if min_step <= 0.0:
+        raise ValueError("min_step must be positive.")
+    if step_growth < 1.0:
+        raise ValueError("step_growth must be at least 1.")
+    if not 0.0 < step_shrink < 1.0:
+        raise ValueError("step_shrink must be in (0, 1).")
+
+    direction = 1.0 if target > start else -1.0
+    total_span = abs(target - start)
+    step = total_span / 30.0 if initial_step is None else abs(float(initial_step))
+    if step <= 0.0:
+        raise ValueError("initial_step must be positive.")
+    step_cap = total_span if max_step is None else abs(float(max_step))
+    step = min(step, step_cap)
+
+    x_current = _as_vector(x0, dim)
+    dim = x_current.size
+    points: list[ContinuationPoint] = []
+
+    def solve_at(parameter: float, x_guess: np.ndarray, parameter_step: float | None) -> ContinuationPoint:
+        P = P_factory(parameter)
+        feasibility_check = (
+            None
+            if feasibility_factory is None
+            else feasibility_factory(parameter)
+        )
+        result = newton_shoot(
+            P,
+            x_guess,
+            dim=dim,
+            tol=tol,
+            max_iter=max_iter,
+            delta=delta,
+            feasibility_check=feasibility_check,
+            damping=damping,
+        )
+        p_of_x = _as_vector(P(result.x), dim)
+        residual = p_of_x - result.x
+        residual_norm = float(np.linalg.norm(residual))
+
+        jacobian: np.ndarray | None = None
+        eigenvalues: np.ndarray | None = None
+        spectral_radius: float | None = None
+        converged = bool(result.converged and residual_norm <= tol)
+        if compute_stability and converged:
+            jacobian = finite_difference_jacobian(
+                P,
+                result.x,
+                dim=dim,
+                delta=delta,
+                feasibility_check=feasibility_check,
+                p_at_x=p_of_x,
+            )
+            eigenvalues = np.linalg.eigvals(jacobian)
+            spectral_radius = float(np.max(np.abs(eigenvalues)))
+
+        fold_indicator = _fold_indicator_from_eigenvalues(eigenvalues)
+        return ContinuationPoint(
+            parameter=float(parameter),
+            x=result.x.copy(),
+            p_of_x=p_of_x,
+            residual=residual,
+            residual_norm=residual_norm,
+            converged=converged,
+            iterations=result.iterations,
+            spectral_radius=spectral_radius,
+            eigenvalues=eigenvalues,
+            jacobian=jacobian,
+            parameter_step=parameter_step,
+            fold_indicator=fold_indicator,
+            fold_candidate=bool(
+                fold_indicator is not None and fold_indicator <= fold_tolerance
+            ),
+        )
+
+    try:
+        first = solve_at(start, x_current, parameter_step=0.0)
+    except Exception as exc:
+        return ContinuationResult(
+            points=[
+                _make_continuation_failure_point(
+                    parameter=start,
+                    x=x_current,
+                    reason=str(exc),
+                    parameter_step=0.0,
+                )
+            ],
+            stopped_early=True,
+            stop_reason=f"{type(exc).__name__} at parameter={start:.9g}: {exc}",
+        )
+    points.append(first)
+    if not first.converged:
+        return ContinuationResult(
+            points=points,
+            stopped_early=True,
+            stop_reason=(
+                f"Newton did not converge at parameter={start:.9g}; "
+                f"residual={first.residual_norm:.3e}"
+            ),
+            fold_detected=first.fold_candidate,
+            fold_parameter=start if first.fold_candidate else None,
+        )
+
+    current_parameter = start
+    x_current = first.x.copy()
+
+    while direction * (target - current_parameter) > 1e-12:
+        step = min(step, step_cap)
+        signed_step = direction * min(step, abs(target - current_parameter))
+        next_parameter = current_parameter + signed_step
+
+        try:
+            point = solve_at(next_parameter, x_current, parameter_step=signed_step)
+        except Exception as exc:
+            point = _make_continuation_failure_point(
+                parameter=next_parameter,
+                x=x_current,
+                reason=str(exc),
+                parameter_step=signed_step,
+            )
+
+        if point.converged:
+            points.append(point)
+            current_parameter = next_parameter
+            x_current = point.x.copy()
+
+            if point.iterations <= easy_iterations and step < step_cap:
+                step = min(step * step_growth, step_cap)
+            elif point.iterations >= hard_iterations:
+                step = max(step * step_shrink, min_step)
+            continue
+
+        reduced_step = step * step_shrink
+        if reduced_step >= min_step and abs(target - current_parameter) > min_step:
+            step = reduced_step
+            continue
+
+        points.append(point)
+        reason = (
+            f"Adaptive continuation failed at parameter={next_parameter:.9g}; "
+            f"last step={abs(signed_step):.3e}, min_step={min_step:.3e}"
+        )
+        if point.failure_reason:
+            reason += f"; {point.failure_reason}"
+        else:
+            reason += f"; residual={point.residual_norm:.3e}"
+        fold_points = [p for p in points if p.fold_candidate]
+        return ContinuationResult(
+            points=points,
+            stopped_early=True,
+            stop_reason=reason,
+            fold_detected=bool(fold_points),
+            fold_parameter=fold_points[-1].parameter if fold_points else None,
+        )
+
+    fold_points = [p for p in points if p.fold_candidate]
+    return ContinuationResult(
+        points=points,
+        stopped_early=False,
+        fold_detected=bool(fold_points),
+        fold_parameter=fold_points[-1].parameter if fold_points else None,
+    )
 
 
 def grid_search_initial_guesses(
@@ -868,6 +1098,7 @@ def make_passive_brachiation_q2_stride_map(
             switch_policy=policy,
             collision_mode=collision_mode,
             collision_model=collision_model,
+            stop_after_releases=1,
         )
         release_samples = [sample for sample in samples if sample.phase.value == "release"]
         if not release_samples:
@@ -912,6 +1143,7 @@ def evaluate_passive_brachiation_q2_stride(
         switch_policy=lambda *_args: SwitchDecision.SWITCH,
         collision_mode=collision_mode,
         collision_model=collision_model,
+        stop_after_releases=1,
     )
     release_samples = [sample for sample in samples if sample.phase.value == "release"]
     if not release_samples:
@@ -986,6 +1218,7 @@ def make_passive_brachiation_stride_map(
             switch_policy=policy,
             collision_mode=collision_mode,
             collision_model=collision_model,
+            stop_after_releases=1,
         )
         release_samples = [sample for sample in samples if sample.phase.value == "release"]
         if not release_samples:
@@ -1022,6 +1255,7 @@ def evaluate_passive_brachiation_stride(
         SwitchDecision,
     ]
     | None = None,
+    stop_after_releases: int | None = 1,
     direction: float | None = None,
 ) -> StrideMapEvaluation:
     """Evaluate one passive-brachiation stride and keep the trajectory."""
@@ -1055,6 +1289,7 @@ def evaluate_passive_brachiation_stride(
         switch_policy=switch_policy or (lambda *_args: SwitchDecision.SWITCH),
         collision_mode=collision_mode,
         collision_model=collision_model,
+        stop_after_releases=stop_after_releases,
     )
     release_samples = [sample for sample in samples if sample.phase.value == "release"]
     if not release_samples:

@@ -1,0 +1,31 @@
+{
+  "arm_non_degenerate_roots": 43,
+  "arm_offsets_scanned": 22,
+  "branch": "negative",
+  "d_fixed": 0.43600873979079036,
+  "fine_plot_path": "results\\com_special_point_plot1_fine_scan.png",
+  "fold_coexistence_min_offset": -0.35,
+  "fold_plot_path": "results\\com_special_point_plot3_fold_arms.png",
+  "gamma_deg": 45.0,
+  "largest_d_jump": 0.36372484490961654,
+  "largest_d_jump_left": -0.3522499999999987,
+  "largest_d_jump_right": -0.3557499999999983,
+  "largest_d_jump_skipped_nonconverged": 13,
+  "largest_eig_jump": 1.2242238437126796,
+  "largest_eig_jump_left": -0.3522499999999987,
+  "largest_eig_jump_right": -0.3557499999999983,
+  "local_converged": 68,
+  "local_points": 81,
+  "long_family_roots": 1,
+  "nonconverged_gaps": [
+    {
+      "end_offset": -0.3554999999999983,
+      "first_reason": null,
+      "points": 13,
+      "start_offset": -0.35249999999999865
+    }
+  ],
+  "period": 1,
+  "short_stable_roots": 21,
+  "short_unstable_roots": 21
+}

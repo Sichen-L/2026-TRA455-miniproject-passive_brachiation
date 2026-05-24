@@ -50,6 +50,7 @@ class ImpactResult:
     impact_time: float | None
     impact_state: np.ndarray | None
     impact_point: np.ndarray | None
+    impact_velocity: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -355,13 +356,19 @@ def detect_slope_impact(
     t_curr: float,
     has_left_slope: bool = True,
     leave_tol: float = 1e-3,
+    state_at_fraction: Callable[[float], BrachiationState] | None = None,
+    root_tolerance: float = 1e-10,
+    root_max_iterations: int = 50,
 ) -> tuple[ImpactResult, bool]:
     """Detect whether the free endpoint crossed the slope surface.
 
     The free end must first move below the slope by ``leave_tol`` before a
     zero-crossing can count as an impact.  This keeps release-section starts
-    and small numerical chatter from being recorded as immediate re-impacts,
-    while still using zero-crossing interpolation for the actual contact time.
+    and small numerical chatter from being recorded as immediate re-impacts.
+
+    When ``state_at_fraction`` is supplied, the impact time is refined by
+    bisection on the true signed distance along the RK substep trajectory.  The
+    legacy linear interpolation path is kept as a fallback for direct callers.
     """
     pts_prev = forward_kinematics(state_prev.q, support_point, parameters.l1, parameters.l2)
     pts_curr = forward_kinematics(state_curr.q, support_point, parameters.l1, parameters.l2)
@@ -373,22 +380,61 @@ def detect_slope_impact(
         impact_time=None,
         impact_state=None,
         impact_point=None,
+        impact_velocity=None,
     )
 
     if not has_left_slope:
         return no_impact, d_curr < -leave_tol
 
     if d_prev < 0.0 and d_curr >= 0.0:
-        alpha = d_prev / (d_prev - d_curr)
+        if state_at_fraction is None:
+            alpha = d_prev / (d_prev - d_curr)
+            q_impact = state_prev.q + alpha * (state_curr.q - state_prev.q)
+            qd_impact = state_prev.qd + alpha * (state_curr.qd - state_prev.qd)
+            impact_point = pts_prev.free + alpha * (pts_curr.free - pts_prev.free)
+        else:
+            lo = 0.0
+            hi = 1.0
+            alpha = d_prev / (d_prev - d_curr)
+
+            for _ in range(root_max_iterations):
+                mid = 0.5 * (lo + hi)
+                state_mid = state_at_fraction(mid)
+                pts_mid = forward_kinematics(
+                    state_mid.q,
+                    support_point,
+                    parameters.l1,
+                    parameters.l2,
+                )
+                d_mid = slope.signed_distance(pts_mid.free)
+                if abs(d_mid) <= root_tolerance or (hi - lo) <= root_tolerance:
+                    alpha = mid
+                    break
+                if d_mid < 0.0:
+                    lo = mid
+                else:
+                    hi = mid
+                alpha = 0.5 * (lo + hi)
+
+            state_impact = state_at_fraction(alpha)
+            pts_impact = forward_kinematics(
+                state_impact.q,
+                support_point,
+                parameters.l1,
+                parameters.l2,
+            )
+            q_impact = state_impact.q.copy()
+            qd_impact = state_impact.qd.copy()
+            impact_point = pts_impact.free.copy()
+
         t_impact = t_prev + alpha * (t_curr - t_prev)
-        q_impact = state_prev.q + alpha * (state_curr.q - state_prev.q)
-        impact_point = pts_prev.free + alpha * (pts_curr.free - pts_prev.free)
         return (
             ImpactResult(
                 contact_occurred=True,
                 impact_time=t_impact,
                 impact_state=q_impact,
                 impact_point=impact_point,
+                impact_velocity=qd_impact,
             ),
             has_left_slope,
         )

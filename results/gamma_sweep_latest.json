@@ -1,0 +1,43 @@
+{
+  "config": {
+    "adaptive_growth": 1.35,
+    "adaptive_max_step": 2.0,
+    "adaptive_min_step": 0.05,
+    "adaptive_shrink": 0.5,
+    "base_gamma_deg": 45.0,
+    "branch": "negative",
+    "com_offset": 0.3333333333333333,
+    "continuation_damping": 0.8,
+    "continuation_delta": 1e-05,
+    "continuation_max_iter": 10,
+    "continuation_tol": 1e-06,
+    "d_fixed": 0.4359839398064935,
+    "dt": 0.005,
+    "fold_tolerance": 0.075,
+    "gamma_high": 90.0,
+    "gamma_low": 0.0,
+    "impact_event": "subdt_bisection_v1",
+    "period": 1,
+    "source_com_hash": "55d76f80ced7",
+    "source_com_result": "c:\\Users\\82646\\OneDrive\\\u684c\u9762\\Chalmers work\\p4\\TRA455 Artistic Intelligence in Robotics\\Project\\2026-05-23-mini_project_passive_brachiation\\results\\com_sweep_latest.npz",
+    "steps_per_side": 31,
+    "t_max": 8.0
+  },
+  "summary": {
+    "base_gamma_deg": 45.0,
+    "best_lambda": 0.006394256768516015,
+    "best_lambda_gamma_deg": 45.0,
+    "branch": "negative",
+    "com_offset": 0.3333333333333333,
+    "d_fixed": 0.4359839398064935,
+    "hash": "4ee3f8ad2bde",
+    "high_stop_reason": "Adaptive continuation failed at parameter=77.1960938; last step=6.328e-02, min_step=5.000e-02; Newton step could not find a feasible candidate.",
+    "high_stopped_early": true,
+    "low_stop_reason": "Adaptive continuation failed at parameter=2.34375; last step=9.375e-02, min_step=5.000e-02; residual=4.831e-04",
+    "low_stopped_early": true,
+    "output_path": "results\\gamma_sweep_4ee3f8ad2bde.npz",
+    "period": 1,
+    "row_count": 57,
+    "source_com_result": "c:\\Users\\82646\\OneDrive\\\u684c\u9762\\Chalmers work\\p4\\TRA455 Artistic Intelligence in Robotics\\Project\\2026-05-23-mini_project_passive_brachiation\\results\\com_sweep_latest.npz"
+  }
+}

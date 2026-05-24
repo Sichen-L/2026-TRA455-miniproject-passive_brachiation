@@ -1,0 +1,64 @@
+{
+  "config": {
+    "adaptive_growth": 1.35,
+    "adaptive_max_step": 0.04,
+    "adaptive_min_step": 0.0005,
+    "adaptive_shrink": 0.5,
+    "branch": "negative",
+    "branches": [
+      "positive",
+      "negative"
+    ],
+    "continuation_damping": 0.8,
+    "continuation_delta": 1e-05,
+    "continuation_max_iter": 10,
+    "continuation_tol": 1e-06,
+    "d_fixed": 0.4359839398064935,
+    "d_lower": 0.05,
+    "d_scan_points": 30,
+    "d_upper_fraction": 0.95,
+    "dt": 0.005,
+    "fold_tolerance": 0.075,
+    "gamma_deg": 45.0,
+    "impact_event": "subdt_bisection_v1",
+    "offset_high": 0.5,
+    "offset_low": -0.5,
+    "params": {
+      "I1": 0.008553202999999999,
+      "I2": 0.008553202999999999,
+      "gravity": 9.81,
+      "l1": 0.314,
+      "l2": 0.314,
+      "lc1": 0.157,
+      "lc2": 0.157,
+      "m1": 1.041,
+      "m2": 1.041
+    },
+    "period": 1,
+    "periods": [
+      1,
+      2
+    ],
+    "steps_per_side": 31,
+    "t_max": 8.0
+  },
+  "summary": {
+    "best_lambda": 0.006391794316051857,
+    "best_lambda_offset": 0.3333333333333333,
+    "branch": "negative",
+    "contact_fold_detected": true,
+    "contact_fold_parameter": -0.3520833333333333,
+    "contact_stop_reason": "Adaptive continuation failed at parameter=-0.352604167; last step=5.208e-04, min_step=5.000e-04; residual=1.404e-04",
+    "contact_stopped_early": true,
+    "d_fixed": 0.4359839398064935,
+    "elbow_fold_detected": false,
+    "elbow_fold_parameter": null,
+    "elbow_stop_reason": "Adaptive continuation failed at parameter=0.465078125; last step=7.031e-04, min_step=5.000e-04; residual=7.142e-02",
+    "elbow_stopped_early": true,
+    "hash": "55d76f80ced7",
+    "output_path": "results\\com_sweep_55d76f80ced7.npz",
+    "period": 1,
+    "q2_fixed": NaN,
+    "row_count": 56
+  }
+}
