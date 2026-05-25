@@ -12,6 +12,7 @@ family.
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ from passive_brachiation import (
     forward_kinematics,
     ik_from_stride_distance,
     make_passive_brachiation_feasibility_check,
+    release_stride_distances,
+    samples_to_arrays,
     scan_stride_fixed_points,
     simulate,
     stride_distance_from_point,
@@ -43,7 +46,7 @@ from report_setup import load_best_com_setup
 
 
 PART = "part9_partial_loss"
-ALGO_VERSION = "v2"
+ALGO_VERSION = "v3"
 
 DEFAULTS: dict[str, Any] = {
     "retention": 1.0,
@@ -61,6 +64,11 @@ DEFAULTS: dict[str, Any] = {
     "continuation_damping": 0.5,
     "legality_releases": 3,
     "d_upper_fraction": 0.995,
+    "rollout_gamma": 4.0,
+    "rollout_periods": 3,
+    "gif_fps": 24,
+    "gif_frames": 120,
+    "animation_speed": 1.0,
 }
 
 
@@ -309,6 +317,66 @@ def _branch_distance(rows_a: list[dict[str, Any]], rows_b: list[dict[str, Any]])
     return common, np.array(distances, dtype=float)
 
 
+def _select_rollout_row(rows: list[dict[str, Any]], gamma_deg: float) -> dict[str, Any]:
+    tol = 1e-8
+    pool = [
+        row for row in rows
+        if row["converged"] and row["stable"] and row["legal"] and abs(row["gamma_deg"] - gamma_deg) <= tol
+    ]
+    if not pool:
+        pool = [
+            row for row in rows
+            if row["converged"] and row["legal"] and abs(row["gamma_deg"] - gamma_deg) <= tol
+        ]
+    if not pool:
+        available = sorted({round(row["gamma_deg"], 8) for row in rows if row["converged"] and row["legal"]})
+        raise RuntimeError(f"No legal part-9 rollout point at gamma={gamma_deg:.3f} deg. Available legal gammas: {available}")
+    return min(pool, key=lambda row: (row["residual_norm"], row["spectral_radius"] if np.isfinite(row["spectral_radius"]) else np.inf))
+
+
+def _simulate_rollout(model, slope, branch, cfg: dict[str, Any], x: np.ndarray, periods: int) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    q0 = ik_from_stride_distance(float(x[0]), slope=slope, parameters=model.p, direction=-1.0, branch=branch)
+    samples = simulate(
+        model=model,
+        slope=slope,
+        initial_state=BrachiationState(q=q0, qd=np.asarray(x[1:3], dtype=float), support_index=0),
+        initial_support_point=np.zeros(2, dtype=float),
+        duration=max(float(cfg["t_max"]), (int(periods) + 1) * float(cfg["t_max"])),
+        dt=cfg["dt"],
+        switch_policy=_switch_policy,
+        collision_model=make_blend_collision(cfg["retention"]),
+        stop_after_releases=int(periods),
+    )
+    history = samples_to_arrays(samples, slope=slope)
+    strides = release_stride_distances(samples, slope=slope, support_origin=np.zeros(2), direction=1.0)
+    arrays = {
+        "rollout_time": np.asarray(history["times"], dtype=float),
+        "rollout_q": np.asarray(history["q"], dtype=float),
+        "rollout_qd": np.asarray(history["qd"], dtype=float),
+        "rollout_support": np.asarray(history["supports"], dtype=float),
+        "rollout_elbow": np.asarray(history["elbows"], dtype=float),
+        "rollout_free": np.asarray(history["frees"], dtype=float),
+        "rollout_kinetic": np.asarray(history["kinetic_energy"], dtype=float),
+        "rollout_potential": np.asarray(history["potential_energy"], dtype=float),
+        "rollout_total": np.asarray(history["total_energy"], dtype=float),
+        "rollout_free_dist": np.asarray(history["free_dist"], dtype=float),
+        "rollout_elbow_dist": np.asarray(history["elbow_dist"], dtype=float),
+        "rollout_phase": np.asarray(history["phase"], dtype="U16"),
+        "rollout_release_stride": np.asarray(strides, dtype=float),
+    }
+    summary = {
+        "rollout_duration_s": float(arrays["rollout_time"][-1] - arrays["rollout_time"][0]),
+        "rollout_release_count": int(strides.size),
+        "rollout_stride_mean": float(np.mean(strides)) if strides.size else float("nan"),
+        "rollout_stride_std": float(np.std(strides)) if strides.size else float("nan"),
+        "rollout_kinetic_initial_J": float(arrays["rollout_kinetic"][0]),
+        "rollout_kinetic_final_J": float(arrays["rollout_kinetic"][-1]),
+        "rollout_total_initial_J": float(arrays["rollout_total"][0]),
+        "rollout_total_final_J": float(arrays["rollout_total"][-1]),
+    }
+    return arrays, summary
+
+
 def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     setup = load_best_com_setup(results_dir=cfg["results_dir"])
     model = TwoLinkBrachiationModel(setup.params)
@@ -326,6 +394,17 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
     rows = high_rows + low_rows
 
     common_gamma, branch_distance = _branch_distance(high_rows, low_rows)
+    rollout_gamma = float(cfg["rollout_gamma"])
+    rollout_row = _select_rollout_row(rows, rollout_gamma)
+    rollout_x = np.array([rollout_row["d"], rollout_row["q1_dot"], rollout_row["q2_dot"]], dtype=float)
+    rollout_arrays, rollout_summary = _simulate_rollout(
+        model,
+        Slope(gamma=np.deg2rad(rollout_gamma)),
+        branch,
+        cfg,
+        rollout_x,
+        int(cfg["rollout_periods"]),
+    )
 
     arrays = {
         "source": np.array([row["source"] for row in rows], dtype="U32"),
@@ -341,6 +420,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "max_elbow_distance": np.array([row["max_elbow_distance"] for row in rows], dtype=float),
         "common_gamma_deg": common_gamma,
         "branch_distance": branch_distance,
+        **rollout_arrays,
     }
     stable_legal = arrays["converged"] & arrays["stable"] & arrays["legal"]
     summary = {
@@ -360,11 +440,19 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "branch_overlap_points": int(common_gamma.size),
         "branch_distance_max": float(np.nanmax(branch_distance)) if branch_distance.size else float("nan"),
         "branch_distance_rms": float(np.sqrt(np.nanmean(branch_distance**2))) if branch_distance.size else float("nan"),
+        "rollout_gamma": rollout_gamma,
+        "rollout_periods": int(cfg["rollout_periods"]),
+        "rollout_source": rollout_row["source"],
+        "rollout_d": float(rollout_row["d"]),
+        "rollout_q1_dot": float(rollout_row["q1_dot"]),
+        "rollout_q2_dot": float(rollout_row["q2_dot"]),
+        "rollout_spectral_radius": float(rollout_row["spectral_radius"]),
+        **rollout_summary,
     }
     return arrays, summary
 
 
-def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Figure]:
+def _plot_continuation(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any]) -> Figure:
     import matplotlib.pyplot as plt
 
     sources = list(dict.fromkeys(arrays["source"].tolist()))
@@ -422,12 +510,179 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
         f"COM offset={summary['com_offset']:+.4f}, retention s={summary['retention']:.2f}"
     )
     fig.tight_layout()
-    return {"main": fig}
+    return fig
+
+
+def _plot_rollout(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any]) -> Figure:
+    import matplotlib.pyplot as plt
+
+    t = arrays["rollout_time"]
+    q = arrays["rollout_q"]
+    qd = arrays["rollout_qd"]
+    phase = arrays["rollout_phase"]
+    release_t = t[phase == "release"]
+    impact_t = t[phase == "impact"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+    axes[0, 0].plot(t, np.rad2deg(q[:, 0]), label="q1")
+    axes[0, 0].plot(t, np.rad2deg(q[:, 1]), label="q2")
+    axes[0, 0].set_ylabel("angle [deg]")
+    axes[0, 0].set_title("joint angles")
+    axes[0, 0].legend(fontsize=8)
+
+    axes[0, 1].plot(t, qd[:, 0], label="qdot1")
+    axes[0, 1].plot(t, qd[:, 1], label="qdot2")
+    axes[0, 1].set_ylabel("angular speed [rad/s]")
+    axes[0, 1].set_title("joint velocities")
+    axes[0, 1].legend(fontsize=8)
+
+    axes[1, 0].plot(t, arrays["rollout_kinetic"], color="tab:blue", label="kinetic")
+    axes[1, 0].plot(t, arrays["rollout_total"], color="tab:green", linestyle="--", label="total")
+    axes[1, 0].set_xlabel("time [s]")
+    axes[1, 0].set_ylabel("energy [J]")
+    axes[1, 0].set_title("energy over three releases")
+    axes[1, 0].legend(fontsize=8)
+
+    axes[1, 1].plot(arrays["rollout_support"][:, 0], arrays["rollout_support"][:, 1], "o", color="black", markersize=3, label="support")
+    axes[1, 1].plot(arrays["rollout_elbow"][:, 0], arrays["rollout_elbow"][:, 1], color="tab:orange", label="elbow")
+    axes[1, 1].plot(arrays["rollout_free"][:, 0], arrays["rollout_free"][:, 1], color="tab:purple", label="free end")
+    y_values = np.concatenate((arrays["rollout_support"][:, 0], arrays["rollout_elbow"][:, 0], arrays["rollout_free"][:, 0]))
+    y_line = np.array([float(np.min(y_values) - 0.05), float(np.max(y_values) + 0.05)])
+    axes[1, 1].plot(y_line, -y_line * np.tan(np.deg2rad(summary["rollout_gamma"])), color="0.35", linestyle="--", label="slope")
+    axes[1, 1].set_aspect("equal", adjustable="box")
+    axes[1, 1].set_xlabel("y [m]")
+    axes[1, 1].set_ylabel("z [m]")
+    axes[1, 1].set_title("workspace rollout")
+    axes[1, 1].legend(fontsize=8)
+
+    for ax in axes[0, :].ravel().tolist() + [axes[1, 0]]:
+        for value in impact_t:
+            ax.axvline(value, color="tab:red", alpha=0.18, linewidth=0.8)
+        for value in release_t:
+            ax.axvline(value, color="tab:green", alpha=0.18, linewidth=0.8)
+    for ax in axes.ravel():
+        ax.grid(True, alpha=0.25)
+    fig.suptitle(
+        f"Part 9 rollout: gamma={summary['rollout_gamma']:.1f} deg, "
+        f"{summary['rollout_release_count']} releases, source={summary['rollout_source']}"
+    )
+    fig.tight_layout()
+    return fig
+
+
+def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Figure]:
+    return {"main": _plot_continuation(arrays, summary, cfg), "gamma4_rollout": _plot_rollout(arrays, summary, cfg)}
+
+
+def animation_path(result: PartResult | None = None, *, results_dir: Path | str = Path("results"), latest: bool = True) -> Path:
+    results_dir = Path(results_dir)
+    if result is None or latest:
+        return results_dir / f"{PART}_latest__gamma4_rollout.gif"
+    return results_dir / f"{PART}_{result.hash}__gamma4_rollout.gif"
+
+
+def _load_arrays(path: Path) -> dict[str, np.ndarray]:
+    data = np.load(path, allow_pickle=True)
+    return {name: np.asarray(data[name]) for name in data.files if not name.endswith("_json")}
+
+
+def _playback_frame_indices(time: np.ndarray, fps: int, max_frames: int, animation_speed: float) -> np.ndarray:
+    speed = float(animation_speed)
+    if speed <= 0.0:
+        raise ValueError("animation_speed must be positive.")
+    duration = max(0.0, float(time[-1] - time[0]))
+    target_frames = max(2, int(np.ceil(duration * int(fps) / speed)) + 1)
+    frame_count = min(int(max_frames), len(time), target_frames)
+    return np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+
+
+def _make_rollout_animation(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any], path: Path) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    time = arrays["rollout_time"]
+    support = arrays["rollout_support"]
+    elbow = arrays["rollout_elbow"]
+    free = arrays["rollout_free"]
+    kinetic = arrays["rollout_kinetic"]
+    frame_indices = _playback_frame_indices(time, cfg["gif_fps"], cfg["gif_frames"], cfg.get("animation_speed", 1.0))
+
+    all_y = np.concatenate((support[:, 0], elbow[:, 0], free[:, 0]))
+    all_z = np.concatenate((support[:, 1], elbow[:, 1], free[:, 1]))
+    pad = 0.08
+    y_limits = (float(np.min(all_y) - pad), float(np.max(all_y) + pad))
+    z_limits = (float(np.min(all_z) - pad), float(np.max(all_z) + pad))
+    y_line = np.array([y_limits[0], y_limits[1]])
+
+    fig, axes = plt.subplots(1, 2, figsize=(8.8, 3.7))
+    ax_motion, ax_energy = axes
+    ax_motion.set_xlim(*y_limits)
+    ax_motion.set_ylim(*z_limits)
+    ax_motion.set_aspect("equal", adjustable="box")
+    ax_motion.plot(y_line, -y_line * np.tan(np.deg2rad(summary["rollout_gamma"])), color="0.35", linestyle="--", linewidth=1)
+    ax_motion.set_xlabel("y [m]")
+    ax_motion.set_ylabel("z [m]")
+    ax_motion.set_title(f"P9 gamma={summary['rollout_gamma']:.1f} deg rollout")
+    link_line, = ax_motion.plot([], [], "-o", color="tab:purple", linewidth=2.0, markersize=4)
+    trace_line, = ax_motion.plot([], [], color="tab:orange", linewidth=1.0, alpha=0.75)
+    time_text = ax_motion.text(0.02, 0.94, "", transform=ax_motion.transAxes, fontsize=8, va="top")
+
+    ax_energy.plot(time, kinetic, color="0.75", linewidth=1.0)
+    energy_marker, = ax_energy.plot([], [], "o", color="tab:blue", markersize=4)
+    ax_energy.set_xlim(float(time[0]), float(time[-1]))
+    y0 = float(np.min(kinetic))
+    y1 = float(np.max(kinetic))
+    margin = max(1e-6, 0.08 * (y1 - y0))
+    ax_energy.set_ylim(y0 - margin, y1 + margin)
+    ax_energy.set_xlabel("time [s]")
+    ax_energy.set_ylabel("kinetic energy [J]")
+    ax_energy.set_title("kinetic energy")
+    for ax in axes:
+        ax.grid(True, alpha=0.25)
+
+    def update(frame_index: int):
+        idx = int(frame_indices[frame_index])
+        link_line.set_data([support[idx, 0], elbow[idx, 0], free[idx, 0]], [support[idx, 1], elbow[idx, 1], free[idx, 1]])
+        trace_line.set_data(free[: idx + 1, 0], free[: idx + 1, 1])
+        energy_marker.set_data([time[idx]], [kinetic[idx]])
+        time_text.set_text(f"t = {time[idx]:.3f} s")
+        return link_line, trace_line, energy_marker, time_text
+
+    anim = FuncAnimation(fig, update, frames=len(frame_indices), blit=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    anim.save(path, writer=PillowWriter(fps=int(cfg["gif_fps"])))
+    plt.close(fig)
+
+
+def ensure_animation(
+    result: PartResult,
+    *,
+    results_dir: Path | str,
+    force: bool,
+    verbose: bool,
+    animation_cfg: dict[str, Any] | None = None,
+) -> Path:
+    results_dir = Path(results_dir)
+    animation_cfg = animation_cfg or {}
+    gif_path = animation_path(result, results_dir=results_dir, latest=False)
+    gif_alias = animation_path(result, results_dir=results_dir, latest=True)
+    if force or animation_cfg or not gif_path.exists():
+        if verbose:
+            print(f"[{PART}] writing animation {gif_path.name}...")
+        _make_rollout_animation(_load_arrays(result.data_path), result.summary, {**result.config, **animation_cfg}, gif_path)
+    if gif_path.resolve() != gif_alias.resolve():
+        shutil.copy2(gif_path, gif_alias)
+    return gif_alias
 
 
 def run(params=None, *, force=False, results_dir: Path | str = Path("results"), verbose=True) -> PartResult:
-    cfg = {**DEFAULTS, **(params or {}), "_algo": ALGO_VERSION, "results_dir": str(results_dir)}
-    return cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    params = params or {}
+    cfg = {**DEFAULTS, **params, "_algo": ALGO_VERSION, "results_dir": str(results_dir)}
+    animation_speed = float(cfg.pop("animation_speed"))
+    animation_cfg = {"animation_speed": animation_speed} if "animation_speed" in params else {}
+    result = cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, animation_cfg=animation_cfg)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -437,6 +692,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gamma-low", type=float, default=DEFAULTS["gamma_low"])
     parser.add_argument("--gamma-high", type=float, default=DEFAULTS["gamma_high"])
     parser.add_argument("--gamma-step", type=float, default=DEFAULTS["gamma_step"])
+    parser.add_argument("--rollout-gamma", type=float, default=DEFAULTS["rollout_gamma"])
+    parser.add_argument("--rollout-periods", type=int, default=DEFAULTS["rollout_periods"])
+    parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
+    parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
+    parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     return parser
 
@@ -449,11 +709,18 @@ def main() -> int:
             "gamma_low": args.gamma_low,
             "gamma_high": args.gamma_high,
             "gamma_step": args.gamma_step,
+            "rollout_gamma": args.rollout_gamma,
+            "rollout_periods": args.rollout_periods,
+            "gif_fps": args.gif_fps,
+            "gif_frames": args.gif_frames,
+            "animation_speed": args.animation_speed,
         },
         force=args.force,
         results_dir=args.results_dir,
     )
     print(f"Figure: {result.figure('main')}")
+    print(f"Rollout figure: {result.figure('gamma4_rollout')}")
+    print(f"Animation: {animation_path(result, results_dir=args.results_dir)}")
     print(
         "branch overlap: "
         f"n={result.summary['branch_overlap_points']}, "

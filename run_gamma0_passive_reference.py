@@ -62,6 +62,7 @@ DEFAULTS: dict[str, Any] = {
     "root_maxiter": 60,
     "gif_fps": 24,
     "gif_frames": 90,
+    "animation_speed": 1.0,
 }
 
 
@@ -220,6 +221,16 @@ def animation_path(result: PartResult | None = None, *, results_dir: Path | str 
     return results_dir / f"{PART}_{result.hash}__motion.gif"
 
 
+def _playback_frame_indices(time: np.ndarray, fps: int, max_frames: int, animation_speed: float) -> np.ndarray:
+    speed = float(animation_speed)
+    if speed <= 0.0:
+        raise ValueError("animation_speed must be positive.")
+    duration = max(0.0, float(time[-1] - time[0]))
+    target_frames = max(2, int(np.ceil(duration * int(fps) / speed)) + 1)
+    frame_count = min(int(max_frames), len(time), target_frames)
+    return np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+
+
 def _make_animation(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any], path: Path) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, PillowWriter
@@ -229,8 +240,7 @@ def _make_animation(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg:
     elbow = arrays["elbow"]
     free = arrays["free"]
     kinetic = arrays["kinetic"]
-    frame_count = min(int(cfg["gif_frames"]), len(time))
-    frame_indices = np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+    frame_indices = _playback_frame_indices(time, cfg["gif_fps"], cfg["gif_frames"], cfg.get("animation_speed", 1.0))
 
     all_y = np.concatenate((support[:, 0], elbow[:, 0], free[:, 0]))
     all_z = np.concatenate((support[:, 1], elbow[:, 1], free[:, 1], np.array([0.0])))
@@ -286,7 +296,9 @@ def _load_arrays(path: Path) -> dict[str, np.ndarray]:
 
 
 def run(params=None, *, force=False, results_dir: Path | str = Path("results"), verbose=True) -> PartResult:
-    cfg = {**DEFAULTS, **(params or {})}
+    params = params or {}
+    cfg = {**DEFAULTS, **params}
+    animation_cfg = {"animation_speed": float(cfg.pop("animation_speed"))}
     setup = load_best_com_setup(results_dir=results_dir, branch_override=cfg.get("branch"))
     bp = setup.base_params
     cfg.update(
@@ -310,10 +322,11 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
     results_dir = Path(results_dir)
     gif_path = animation_path(result, results_dir=results_dir, latest=False)
     gif_alias = animation_path(result, results_dir=results_dir, latest=True)
-    if force or not gif_path.exists():
+    force_animation = force or ("animation_speed" in params)
+    if force_animation or not gif_path.exists():
         if verbose:
             print(f"[{PART}] writing animation {gif_path.name}...")
-        _make_animation(_load_arrays(result.data_path), result.summary, result.config, gif_path)
+        _make_animation(_load_arrays(result.data_path), result.summary, {**result.config, **animation_cfg}, gif_path)
     if gif_path.resolve() != gif_alias.resolve():
         shutil.copy2(gif_path, gif_alias)
     return result
@@ -325,6 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--t-max", type=float, default=DEFAULTS["t_max"])
     parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
     parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
+    parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
     return parser
@@ -332,7 +346,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    params = {"dt": args.dt, "t_max": args.t_max, "gif_fps": args.gif_fps, "gif_frames": args.gif_frames}
+    params = {
+        "dt": args.dt,
+        "t_max": args.t_max,
+        "gif_fps": args.gif_fps,
+        "gif_frames": args.gif_frames,
+        "animation_speed": args.animation_speed,
+    }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")
     print(f"Figure: {result.figure('main')}")

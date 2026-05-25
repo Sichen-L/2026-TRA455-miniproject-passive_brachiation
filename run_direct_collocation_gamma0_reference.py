@@ -68,6 +68,7 @@ DEFAULTS: dict[str, Any] = {
     "root_maxiter": 60,
     "gif_fps": 24,
     "gif_frames": 90,
+    "animation_speed": 1.0,
 }
 
 
@@ -316,6 +317,16 @@ def _trajectory_points(x_nodes: np.ndarray, cfg: dict[str, Any]) -> tuple[np.nda
     return support, elbow, free
 
 
+def _playback_frame_indices(time: np.ndarray, fps: int, max_frames: int, animation_speed: float) -> np.ndarray:
+    speed = float(animation_speed)
+    if speed <= 0.0:
+        raise ValueError("animation_speed must be positive.")
+    duration = max(0.0, float(time[-1] - time[0]))
+    target_frames = max(2, int(np.ceil(duration * int(fps) / speed)) + 1)
+    frame_count = min(int(max_frames), len(time), target_frames)
+    return np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+
+
 def make_control_animation(arrays: dict[str, np.ndarray], cfg: dict[str, Any], path: Path, method_label: str) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, PillowWriter
@@ -326,8 +337,12 @@ def make_control_animation(arrays: dict[str, np.ndarray], cfg: dict[str, Any], p
     torque = np.asarray(arrays["u_elbow"], dtype=float)
     support, elbow, free = _trajectory_points(x_opt, cfg)
     _ref_support, ref_elbow, ref_free = _trajectory_points(x_ref, cfg)
-    frame_count = min(int(cfg.get("gif_frames", 90)), len(time))
-    frame_indices = np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+    frame_indices = _playback_frame_indices(
+        time,
+        int(cfg.get("gif_fps", 24)),
+        int(cfg.get("gif_frames", 90)),
+        float(cfg.get("animation_speed", 1.0)),
+    )
 
     all_y = np.concatenate((support[:, 0], elbow[:, 0], free[:, 0], ref_elbow[:, 0], ref_free[:, 0]))
     all_z = np.concatenate((support[:, 1], elbow[:, 1], free[:, 1], ref_elbow[:, 1], ref_free[:, 1], np.array([0.0])))
@@ -377,21 +392,34 @@ def make_control_animation(arrays: dict[str, np.ndarray], cfg: dict[str, Any], p
     plt.close(fig)
 
 
-def ensure_animation(result: PartResult, *, results_dir: Path | str, force: bool, verbose: bool, method_label: str, part: str = PART) -> Path:
+def ensure_animation(
+    result: PartResult,
+    *,
+    results_dir: Path | str,
+    force: bool,
+    verbose: bool,
+    method_label: str,
+    part: str = PART,
+    animation_cfg: dict[str, Any] | None = None,
+) -> Path:
     results_dir = Path(results_dir)
+    animation_cfg = animation_cfg or {}
     gif_path = animation_path(result, results_dir=results_dir, latest=False, part=part)
     gif_alias = animation_path(result, results_dir=results_dir, latest=True, part=part)
-    if force or not gif_path.exists():
+    if force or animation_cfg or not gif_path.exists():
         if verbose:
             print(f"[{part}] writing animation {gif_path.name}...")
-        make_control_animation(_load_arrays(result.data_path), result.config, gif_path, method_label)
+        make_control_animation(_load_arrays(result.data_path), {**result.config, **animation_cfg}, gif_path, method_label)
     if gif_path.resolve() != gif_alias.resolve():
         shutil.copy2(gif_path, gif_alias)
     return gif_alias
 
 
 def run(params=None, *, force=False, results_dir: Path | str = Path("results"), verbose=True) -> PartResult:
-    cfg = {**DEFAULTS, **(params or {})}
+    params = params or {}
+    cfg = {**DEFAULTS, **params}
+    animation_speed = float(cfg.pop("animation_speed"))
+    animation_cfg = {"animation_speed": animation_speed} if "animation_speed" in params else {}
     setup = load_best_com_setup(results_dir=results_dir, branch_override=cfg.get("branch"))
     bp = setup.base_params
     cfg.update(
@@ -406,7 +434,7 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
         }
     )
     result = cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
-    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="direct collocation")
+    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="direct collocation", animation_cfg=animation_cfg)
     return result
 
 
@@ -418,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--torque-limit", type=float, default=DEFAULTS["torque_limit"])
     parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
     parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
+    parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
     return parser
@@ -432,6 +461,7 @@ def main() -> int:
         "torque_limit": args.torque_limit,
         "gif_fps": args.gif_fps,
         "gif_frames": args.gif_frames,
+        "animation_speed": args.animation_speed,
     }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")

@@ -71,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
     "root_maxiter": 60,
     "gif_fps": 24,
     "gif_frames": 90,
+    "animation_speed": 1.0,
 }
 
 
@@ -267,7 +268,10 @@ def _plot(arrays, summary, cfg):
 
 
 def run(params=None, *, force=False, results_dir: Path | str = Path("results"), verbose=True) -> PartResult:
-    cfg = {**DEFAULTS, **(params or {})}
+    params = params or {}
+    cfg = {**DEFAULTS, **params}
+    animation_speed = float(cfg.pop("animation_speed"))
+    animation_cfg = {"animation_speed": animation_speed} if "animation_speed" in params else {}
     setup = load_best_com_setup(results_dir=results_dir, branch_override=cfg.get("branch"))
     bp = setup.base_params
     cfg.update(
@@ -282,7 +286,7 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
         }
     )
     result = cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
-    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="iLQR", part=PART)
+    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="iLQR", part=PART, animation_cfg=animation_cfg)
     return result
 
 
@@ -294,6 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--torque-limit", type=float, default=DEFAULTS["torque_limit"])
     parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
     parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
+    parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
     return parser
@@ -308,6 +313,7 @@ def main() -> int:
         "torque_limit": args.torque_limit,
         "gif_fps": args.gif_fps,
         "gif_frames": args.gif_frames,
+        "animation_speed": args.animation_speed,
     }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")
