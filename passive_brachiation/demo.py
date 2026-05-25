@@ -19,10 +19,8 @@ from .switching import SwitchDecision
 
 
 def main() -> None:
-    # Manual-style simplified parameters:
-    # m1 = m2 = 1.041 kg, l1 = l2 = 0.314 m.
-    # The inertias are generated from the uniform-link approximation.
-    params = BrachiationParameters.uniform_links()
+    # Project-default rod + movable point-mass parameters.
+    params = BrachiationParameters.rod_point_mass()
     model = TwoLinkBrachiationModel(params)
 
     # An 8-degree inclined slope (ceiling-like surface).

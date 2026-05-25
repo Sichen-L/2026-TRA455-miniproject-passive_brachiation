@@ -1,0 +1,45 @@
+{
+  "config": {
+    "_algo": "v1",
+    "branches": [
+      "positive",
+      "negative"
+    ],
+    "d_lower": 0.05,
+    "d_scan_points": 30,
+    "d_upper_fraction": 0.95,
+    "damping1": 0.0,
+    "damping2": 0.0,
+    "dt": 0.005,
+    "gamma_deg": 45.0,
+    "gravity": 9.81,
+    "l1": 0.314,
+    "l2": 0.314,
+    "m1": 1.041,
+    "m2": 1.041,
+    "periods": [
+      1,
+      2
+    ],
+    "rod_mass_fraction": 0.2,
+    "stop_after_releases": 10,
+    "t_max": 8.0,
+    "weight_position1": 0.5,
+    "weight_position2": 0.5
+  },
+  "figures": {
+    "main": "part2_steady_state_f63b735f7e13__main.png"
+  },
+  "hash": "f63b735f7e13",
+  "part": "part2_steady_state",
+  "summary": {
+    "branch": "negative",
+    "d_fixed": 0.5786887322285337,
+    "legal": true,
+    "period": 1,
+    "release_stride_mean": 0.5786887321203377,
+    "spectral_radius": 0.4183269107671527,
+    "stable": true,
+    "validation_error": 3.296062311974879e-10
+  }
+}

@@ -6,9 +6,9 @@ The model is close to a standard Acrobot:
 * the second joint is the middle elbow joint,
 * the other endpoint is a free hook that may later become the support point.
 
-The rods can be treated as "light rods" by choosing small inertias and placing
-mass at the joint or endpoint.  For a more conventional course-theory model,
-use the default uniform-link approximation:
+The default model treats each link as a light rod with an embedded movable
+point mass.  For a more conventional course-theory model, use the explicit
+``uniform_links`` constructor:
 
 ``lc = l / 2`` and ``I = (1/12) * m * l^2``.
 
@@ -45,9 +45,9 @@ class BrachiationParameters:
     They are generalized torques proportional to ``-q_dot`` and default to
     zero so the original passive model is unchanged unless you opt in.
 
-    The defaults match the simplified manual values discussed in the project:
-    both links have the same mass and length, and both are approximated as
-    uniform slender rods.
+    The defaults match the rod + centred movable point-mass model: both links
+    have the same mass and length, 20% of each link mass is a uniform light
+    rod, and 80% is a point mass initially centred on the rod.
     """
 
     m1: float = 1.041
@@ -56,8 +56,8 @@ class BrachiationParameters:
     l2: float = 0.314
     lc1: float = 0.157
     lc2: float = 0.157
-    I1: float = 0.008553
-    I2: float = 0.008553
+    I1: float = 0.0017106406
+    I2: float = 0.0017106406
     damping1: float = 0.0
     damping2: float = 0.0
     gravity: float = 9.81
@@ -126,6 +126,78 @@ class BrachiationParameters:
             gravity=gravity,
         )
 
+    @staticmethod
+    def _rod_point_link(
+        mass: float,
+        length: float,
+        weight_position_fraction: float,
+        rod_mass_fraction: float = 0.2,
+    ) -> tuple[float, float]:
+        """Return ``(lc, I_centroidal)`` for one rod + movable point-mass link.
+
+        The link mass is split into a uniform light rod (``rod_mass_fraction`` of
+        the mass, spread over the whole length) and a point mass (the rest) at
+        ``weight_position_fraction`` of the length from the proximal joint.
+        Moving the point mass changes ``lc`` and the centroidal inertia ``I``
+        together, so the body stays physically realizable.
+        """
+
+        a = float(weight_position_fraction) * length
+        rod_mass = rod_mass_fraction * mass
+        point_mass = (1.0 - rod_mass_fraction) * mass
+        lc = rod_mass_fraction * (0.5 * length) + (1.0 - rod_mass_fraction) * a
+        inertia = (
+            (1.0 / 12.0) * rod_mass * length**2
+            + rod_mass * (0.5 * length - lc) ** 2
+            + point_mass * (a - lc) ** 2
+        )
+        return lc, inertia
+
+    @classmethod
+    def rod_point_mass(
+        cls,
+        weight_position1: float = 0.5,
+        weight_position2: float = 0.5,
+        m1: float = 1.041,
+        m2: float = 1.041,
+        l1: float = 0.314,
+        l2: float = 0.314,
+        rod_mass_fraction: float = 0.2,
+        damping1: float = 0.0,
+        damping2: float = 0.0,
+        gravity: float = 9.81,
+    ) -> "BrachiationParameters":
+        """Build parameters for the rod + movable point-mass model.
+
+        Each link keeps its total mass ``mN`` but splits it into a uniform light
+        rod (``rod_mass_fraction``) and a point mass at ``weight_positionN`` (a
+        fraction in ``[0, 1]`` of the link length from the proximal joint).
+        ``lc`` and ``I`` are derived consistently, so sweeping the weight
+        position only visits realizable bodies.  With ``rod_mass_fraction=0.2``
+        and the weight centred (``0.5``), ``lc`` equals the uniform-link value
+        while ``I`` is smaller (a centred point mass adds no centroidal inertia).
+        The reachable COM fraction is ``lc/L in [rod_mass_fraction/2,
+        1 - rod_mass_fraction/2]`` (e.g. ``[0.1, 0.9]`` for the 0.2 default).
+        """
+
+        if not 0.0 < rod_mass_fraction < 1.0:
+            raise ValueError("rod_mass_fraction must be in (0, 1).")
+        lc1, inertia1 = cls._rod_point_link(m1, l1, weight_position1, rod_mass_fraction)
+        lc2, inertia2 = cls._rod_point_link(m2, l2, weight_position2, rod_mass_fraction)
+        return cls(
+            m1=m1,
+            m2=m2,
+            l1=l1,
+            l2=l2,
+            lc1=lc1,
+            lc2=lc2,
+            I1=inertia1,
+            I2=inertia2,
+            damping1=damping1,
+            damping2=damping2,
+            gravity=gravity,
+        )
+
 
 @dataclass(frozen=True)
 class BrachiationState:
@@ -175,7 +247,7 @@ class TwoLinkBrachiationModel:
     """
 
     def __init__(self, parameters: BrachiationParameters | None = None) -> None:
-        self.p = parameters or BrachiationParameters.uniform_links()
+        self.p = parameters or BrachiationParameters.rod_point_mass()
 
     def points(self, state: BrachiationState, support: Iterable[float]) -> LinkPoints:
         """Return support, elbow, and free-end positions for ``state``."""

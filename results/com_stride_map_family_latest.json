@@ -1,67 +1,68 @@
 {
   "config": {
+    "_algo": "v2",
+    "branch": "negative",
     "d_lower": 0.05,
     "d_upper_fraction": 0.995,
-    "dt": null,
+    "damping1": 0.0,
+    "damping2": 0.0,
+    "dt": 0.005,
     "error_half_width": 0.035,
+    "gamma_deg": 45.0,
+    "gravity": 9.81,
     "jacobian_delta": 1e-05,
-    "mass_result": "c:\\Users\\82646\\OneDrive\\\u684c\u9762\\Chalmers work\\p4\\TRA455 Artistic Intelligence in Robotics\\Project\\2026-05-23-mini_project_passive_brachiation\\results\\mass_sweep_latest.npz",
-    "offsets": [
-      0.3333333333333333,
-      -0.3475,
-      -0.3525
+    "l1": 0.314,
+    "l2": 0.314,
+    "m1": 1.041,
+    "m2": 1.041,
+    "offset_specs": [
+      {
+        "offset": 0.38666666666666644,
+        "regime": "most_stable"
+      },
+      {
+        "offset": -0.2025,
+        "regime": "near_unstable_stable"
+      },
+      {
+        "offset": -0.2025,
+        "regime": "unstable"
+      }
     ],
-    "output_prefix": "com_stride_map_family",
-    "points": 81,
-    "representative_roots": true,
-    "results_dir": "results",
+    "points": 21,
     "root_residual_tol": 1e-06,
-    "root_scan_points": 90,
-    "t_max": null
+    "root_scan_points": 20,
+    "source_com": "results\\com_sweep_latest.npz",
+    "t_max": 4.0
   },
-  "roots": [
-    {
-      "d_star": 0.5789730611243359,
-      "eigen_real": -0.00028116241557185617,
-      "offset": 0.3333333333333333,
-      "rho": 0.00028116241557185617,
-      "root_index": 0,
-      "stable": true,
-      "valid_points": 81
-    },
-    {
-      "d_star": 0.24739243570891772,
-      "eigen_real": 0.8155515256680345,
-      "offset": -0.3475,
-      "rho": 0.8155515256680345,
-      "root_index": 1,
-      "stable": true,
-      "valid_points": 81
-    },
-    {
-      "d_star": 0.5784948590129709,
-      "eigen_real": 1.8621924150363787,
-      "offset": -0.3525,
-      "rho": 1.8621924150363787,
-      "root_index": 0,
-      "stable": false,
-      "valid_points": 81
-    }
-  ],
+  "figures": {
+    "main": "com_stride_map_family_69544610b498__main.png"
+  },
+  "hash": "69544610b498",
+  "part": "com_stride_map_family",
   "summary": {
     "branch": "negative",
-    "gamma_deg": 45.0,
-    "mass_result": "c:\\Users\\82646\\OneDrive\\\u684c\u9762\\Chalmers work\\p4\\TRA455 Artistic Intelligence in Robotics\\Project\\2026-05-23-mini_project_passive_brachiation\\results\\mass_sweep_latest.npz",
-    "mass_target": "m2",
-    "mass_value": 1.2647666666666668,
-    "offsets": [
-      0.3333333333333333,
-      -0.3475,
-      -0.3525
+    "curve_count": 3,
+    "d_stars": [
+      0.5846706241066867,
+      0.6116506602254901,
+      0.6116506602254901
     ],
-    "plot_path": "results\\com_stride_map_family_latest.png",
-    "root_count": 3,
-    "stable_root_count": 2,
-    "unstable_root_count": 1
+    "gamma_deg": 45.0,
+    "offsets": [
+      0.38666666666666644,
+      -0.2025,
+      -0.2025
+    ],
+    "regimes": [
+      "most_stable",
+      "near_unstable_stable",
+      "unstable"
+    ],
+    "spectral_radii": [
+      0.00314816402946505,
+      0.6328723689996707,
+      0.6328723689996707
+    ]
   }
 }

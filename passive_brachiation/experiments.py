@@ -130,6 +130,44 @@ def make_default_uniform_setup(
     )
 
 
+def make_default_rod_point_setup(
+    gamma_degrees: float = 45.0,
+    m1: float = 1.041,
+    m2: float = 1.041,
+    l1: float = 0.314,
+    l2: float = 0.314,
+    weight_position1: float = 0.5,
+    weight_position2: float = 0.5,
+    rod_mass_fraction: float = 0.2,
+    damping1: float = 0.0,
+    damping2: float = 0.0,
+    gravity: float = 9.81,
+    initial_support: np.ndarray | None = None,
+) -> PassiveSetup:
+    """Create the project's rod + movable point-mass default setup."""
+
+    params = BrachiationParameters.rod_point_mass(
+        weight_position1=weight_position1,
+        weight_position2=weight_position2,
+        m1=m1,
+        m2=m2,
+        l1=l1,
+        l2=l2,
+        rod_mass_fraction=rod_mass_fraction,
+        damping1=damping1,
+        damping2=damping2,
+        gravity=gravity,
+    )
+    return PassiveSetup(
+        params=params,
+        model=TwoLinkBrachiationModel(params),
+        slope=Slope(gamma=np.deg2rad(gamma_degrees)),
+        initial_support=np.zeros(2, dtype=float)
+        if initial_support is None
+        else np.asarray(initial_support, dtype=float),
+    )
+
+
 def run_passive_simulation(
     model: TwoLinkBrachiationModel,
     slope: Slope,

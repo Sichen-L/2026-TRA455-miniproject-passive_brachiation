@@ -91,25 +91,40 @@ def parameters_with_symmetric_com_offset(
     com_offset: float,
     base: BrachiationParameters,
     center_fraction: float = 0.5,
+    rod_mass_fraction: float = 0.2,
 ) -> BrachiationParameters:
-    """Move both link COMs symmetrically while keeping masses and inertias fixed."""
+    """Move both link COMs symmetrically using the rod + movable point-mass model.
+
+    The symmetric offset sets ``lc1/L1 = center + offset`` and
+    ``lc2/L2 = center - offset``.  Each link is a uniform light rod
+    (``rod_mass_fraction`` of the mass) plus a point mass; the weight position is
+    chosen to realize the requested COM fraction and the inertia ``I`` is derived
+    consistently (it is no longer held fixed).  The reachable COM fraction is
+    therefore ``[rod_mass_fraction/2, 1 - rod_mass_fraction/2]`` -- e.g.
+    ``[0.1, 0.9]`` for the 0.2 default, i.e. ``offset in [-0.4, 0.4]``.
+    """
 
     lc1_fraction, lc2_fraction = com_fractions_from_offset(com_offset, center_fraction)
-    if not (0.0 <= lc1_fraction <= 1.0 and 0.0 <= lc2_fraction <= 1.0):
+    lo = 0.5 * rod_mass_fraction
+    hi = 1.0 - 0.5 * rod_mass_fraction
+    tol = 1e-9
+    if not (lo - tol <= lc1_fraction <= hi + tol and lo - tol <= lc2_fraction <= hi + tol):
         raise ValueError(
-            "COM fractions must stay inside [0, 1]; "
-            f"got lc1/L1={lc1_fraction:.3f}, lc2/L2={lc2_fraction:.3f}"
+            f"COM fraction must stay in [{lo:.3f}, {hi:.3f}] for the rod+point model "
+            f"(rod_mass_fraction={rod_mass_fraction}); got "
+            f"lc1/L1={lc1_fraction:.3f}, lc2/L2={lc2_fraction:.3f}"
         )
 
-    return BrachiationParameters(
+    weight_position1 = (lc1_fraction - lo) / (1.0 - rod_mass_fraction)
+    weight_position2 = (lc2_fraction - lo) / (1.0 - rod_mass_fraction)
+    return BrachiationParameters.rod_point_mass(
+        weight_position1=weight_position1,
+        weight_position2=weight_position2,
         m1=base.m1,
         m2=base.m2,
         l1=base.l1,
         l2=base.l2,
-        lc1=lc1_fraction * base.l1,
-        lc2=lc2_fraction * base.l2,
-        I1=base.I1,
-        I2=base.I2,
+        rod_mass_fraction=rod_mass_fraction,
         damping1=base.damping1,
         damping2=base.damping2,
         gravity=base.gravity,

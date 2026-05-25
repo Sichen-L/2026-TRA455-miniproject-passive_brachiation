@@ -1,0 +1,39 @@
+{
+  "config": {
+    "_algo": "v1",
+    "damping1": 0.0,
+    "damping2": 0.0,
+    "dt": 0.005,
+    "duration": 3.0,
+    "gamma_deg": 45.0,
+    "gravity": 9.81,
+    "l1": 0.314,
+    "l2": 0.314,
+    "m1": 1.041,
+    "m2": 1.041,
+    "q0": [
+      -0.8,
+      -0.8
+    ],
+    "qd0": [
+      0.1,
+      0.5
+    ],
+    "rod_mass_fraction": 0.2,
+    "weight_position1": 0.5,
+    "weight_position2": 0.5
+  },
+  "figures": {
+    "main": "part1_modeling_c870a1f8ce67__main.png"
+  },
+  "hash": "c870a1f8ce67",
+  "part": "part1_modeling",
+  "summary": {
+    "final_total_energy": -47.23513078275525,
+    "initial_total_energy": -3.2965870260400107,
+    "model": "rod_point_mass two-link underactuated brachiation",
+    "num_impacts": 6,
+    "num_releases": 6,
+    "num_samples": 609
+  }
+}

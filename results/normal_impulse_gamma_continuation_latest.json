@@ -1,0 +1,45 @@
+{
+  "config": {
+    "_algo": "v1",
+    "branch": "negative",
+    "com_offset": 0.38666666666666644,
+    "d_target": 0.5846703938339892,
+    "damping1": 0.0,
+    "damping2": 0.0,
+    "dt": 0.005,
+    "fallback_scan_points": 401,
+    "gamma_end": 0.0,
+    "gamma_start": 44.0,
+    "gamma_step": 1.0,
+    "gravity": 9.81,
+    "initial_bracket_width": 0.005,
+    "l1": 0.314,
+    "l2": 0.314,
+    "m1": 1.041,
+    "m2": 1.041,
+    "max_abs_impulse": 0.5,
+    "max_bracket_width": 0.2,
+    "maxiter": 60,
+    "rtol": 1e-10,
+    "source_com": "results\\com_sweep_latest.npz",
+    "t_max": 8.0,
+    "xtol": 1e-10
+  },
+  "figures": {
+    "main": "normal_impulse_gamma_continuation_5922025c5471__main.png"
+  },
+  "hash": "5922025c5471",
+  "part": "normal_impulse_gamma_continuation",
+  "summary": {
+    "branch": "negative",
+    "com_offset": 0.38666666666666644,
+    "d_target": 0.5846703938339892,
+    "gamma_end": 0.0,
+    "gamma_start": 44.0,
+    "high_seed": 0.0345960304823577,
+    "low_seed": -0.008803742164465207,
+    "ok_rows": 90,
+    "row_count": 90,
+    "source_com": "results\\com_sweep_latest.npz"
+  }
+}

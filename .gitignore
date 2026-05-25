@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 .claude/
+archive/
+results/*_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+results/normal_velocity_assist_44deg_summary.json

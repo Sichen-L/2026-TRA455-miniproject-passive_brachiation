@@ -1,17 +1,30 @@
-"""Compare one-step stride error maps while varying only COM offset."""
+"""Part 4: one-step stride error maps (basin probe) for three COM offsets.
+
+For a fixed slope and mass, this varies only the symmetric COM offset and draws
+the one-step return-error map ``e_{n+1} = P(d* + e_n) - d*`` around each fixed
+point.  By default three offsets are chosen from the cached COM sweep so the
+figure shows a most-stable, a near-unstable-but-still-stable, and an unstable
+example:
+
+* most_stable            - stable row with the smallest spectral radius
+* near_unstable_stable   - stable companion root at the mildest unstable offset
+* unstable               - mildest unstable row (spectral radius just above 1)
+
+Importable interface::
+
+    from run_com_stride_map_family import run
+    res = run()
+    res.figure("main")
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 from passive_brachiation import (
     BrachiationParameters,
@@ -26,273 +39,218 @@ from passive_brachiation import (
     parameters_with_symmetric_com_offset,
     poincare_jacobian_eigenvalues_1d,
 )
+from report_cache import PartResult, cached_run
+from report_setup import load_best_com_setup
 
+PART = "com_stride_map_family"
+ALGO_VERSION = "v2"
 
-def _load_npz_json(path: Path) -> tuple[dict[str, Any], dict[str, Any], Any]:
-    data = np.load(path)
-    config = json.loads(str(data["config_json"]))
-    summary = json.loads(str(data["summary_json"]))
-    return config, summary, data
-
-
-def _parse_offsets(value: str) -> tuple[float, ...]:
-    return tuple(float(part.strip()) for part in value.split(",") if part.strip())
-
-
-def _base_params_with_mass(target: str, value: float) -> BrachiationParameters:
-    m1 = 1.041
-    m2 = 1.041
-    if target == "m1":
-        m1 = value
-    elif target == "m2":
-        m2 = value
-    elif target == "both":
-        m1 = value
-        m2 = value
-    else:
-        raise ValueError("mass_target must be 'm1', 'm2', or 'both'.")
-    return BrachiationParameters.uniform_links(
-        m1=m1,
-        m2=m2,
-        l1=0.314,
-        l2=0.314,
-        damping1=0.0,
-        damping2=0.0,
-        gravity=9.81,
-    )
+DEFAULTS: dict[str, Any] = {
+    "offsets": None,  # None -> auto-pick stable / critical / unstable from the COM sweep
+    "dt": 0.005,
+    "t_max": 8.0,
+    "points": 81,
+    "error_half_width": 0.035,
+    "d_lower": 0.05,
+    "d_upper_fraction": 0.995,
+    "root_scan_points": 90,
+    "root_residual_tol": 1e-6,
+    "jacobian_delta": 1e-5,
+}
 
 
 def _switch_policy(_t, _state, _support_point, _impact_point, _slope):
     return SwitchDecision.SWITCH
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Draw multiple one-step stride error maps in one figure while "
-            "holding mass/slope fixed and changing only symmetric COM offset."
-        ),
+def _select_offsets(com_path: Path) -> list[dict[str, Any]]:
+    data = np.load(com_path, allow_pickle=True)
+    off = np.asarray(data["com_offset"], dtype=float)
+    rho = np.asarray(data["spectral_radius"], dtype=float)
+    base = (
+        np.asarray(data["converged"], dtype=bool)
+        & np.asarray(data["legal"], dtype=bool)
+        & np.isfinite(rho)
     )
-    parser.add_argument("--mass-result", type=Path, default=Path("results/mass_sweep_latest.npz"))
-    parser.add_argument("--results-dir", type=Path, default=Path("results"))
-    parser.add_argument(
-        "--offsets",
-        type=_parse_offsets,
-        default=(0.3333333333333333, -0.3475, -0.3525),
-        help="Comma-separated COM offsets to compare.",
+    stable = base & np.asarray(data["stable"], dtype=bool) & (rho < 1.0)
+    specs: list[dict[str, Any]] = []
+    if stable.any():
+        stable_indices = np.where(stable)[0]
+        specs.append({
+            "regime": "most_stable",
+            "offset": float(off[stable_indices[np.argmin(rho[stable_indices])]]),
+        })
+    unstable = base & (rho > 1.0)
+    if unstable.any():
+        unstable_indices = np.where(unstable)[0]
+        mild_unstable_offset = float(off[unstable_indices[np.argmin(rho[unstable_indices])]])
+        specs.append({"regime": "near_unstable_stable", "offset": mild_unstable_offset})
+        specs.append({
+            "regime": "unstable",
+            "offset": mild_unstable_offset,
+        })
+    elif base.any():
+        base_indices = np.where(base)[0]
+        if stable.any():
+            stable_indices = np.where(stable)[0]
+            specs.append({
+                "regime": "near_unstable_stable",
+                "offset": float(off[stable_indices[np.argmax(rho[stable_indices])]]),
+            })
+        specs.append({
+            "regime": "unstable",
+            "offset": float(off[base_indices[np.argmax(rho[base_indices])]]),
+        })
+    return specs
+
+
+def _pick_root(roots, rho_of, regime: str):
+    scored = []
+    for root in roots:
+        try:
+            rho = float(rho_of(root.x))
+        except Exception:
+            rho = float("nan")
+        scored.append((root, rho))
+    finite = [(root, rho) for root, rho in scored if np.isfinite(rho)]
+    if not finite:
+        return None
+    stable = [item for item in finite if item[1] < 1.0]
+    if regime in {"stable", "most_stable"}:
+        return min(stable or finite, key=lambda item: item[1])
+    if regime == "near_unstable_stable":
+        return max(stable, key=lambda item: item[1]) if stable else min(finite, key=lambda item: abs(item[1] - 1.0))
+    if regime == "unstable":
+        unstable = [item for item in finite if item[1] > 1.0]
+        return min(unstable or finite, key=lambda item: abs(item[1] - 1.0))
+    return min(finite, key=lambda item: abs(item[1] - 1.0))
+
+
+def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    base_params = BrachiationParameters.rod_point_mass(
+        m1=cfg["m1"], m2=cfg["m2"], l1=cfg["l1"], l2=cfg["l2"],
+        rod_mass_fraction=0.2, damping1=cfg["damping1"], damping2=cfg["damping2"], gravity=cfg["gravity"],
     )
-    parser.add_argument(
-        "--representative-roots",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "For each offset, plot one representative root instead of every root. "
-            "This keeps the default figure to stable / near-critical / unstable examples."
-        ),
-    )
-    parser.add_argument("--points", type=int, default=81)
-    parser.add_argument("--error-half-width", type=float, default=0.035)
-    parser.add_argument("--d-lower", type=float, default=0.05)
-    parser.add_argument("--d-upper-fraction", type=float, default=0.995)
-    parser.add_argument("--root-scan-points", type=int, default=90)
-    parser.add_argument("--root-residual-tol", type=float, default=1e-6)
-    parser.add_argument("--jacobian-delta", type=float, default=1e-5)
-    parser.add_argument("--dt", type=float, default=None)
-    parser.add_argument("--t-max", type=float, default=None)
-    parser.add_argument("--output-prefix", type=str, default="com_stride_map_family")
-    return parser
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-    args.results_dir.mkdir(parents=True, exist_ok=True)
-
-    mass_config, mass_summary, _mass_data = _load_npz_json(args.mass_result)
-    mass_target = str(mass_summary["mass_target"])
-    mass_value = float(mass_summary["best_lambda_mass"])
-    gamma_deg = float(mass_summary["gamma_deg"])
-    branch = str(mass_summary["branch"])
-    dt = float(args.dt if args.dt is not None else mass_config["dt"])
-    t_max = float(args.t_max if args.t_max is not None else mass_config["t_max"])
-
-    base_params = _base_params_with_mass(mass_target, mass_value)
-    slope = Slope(gamma=np.deg2rad(gamma_deg))
+    slope = Slope(gamma=np.deg2rad(cfg["gamma_deg"]))
+    branch = str(cfg["branch"])
     support = np.zeros(2, dtype=float)
     total_length = base_params.l1 + base_params.l2
-    d_bounds = (
-        float(args.d_lower),
-        float(args.d_upper_fraction * total_length),
-    )
+    d_bounds = (float(cfg["d_lower"]), float(cfg["d_upper_fraction"] * total_length))
+    error_grid = np.linspace(-cfg["error_half_width"], cfg["error_half_width"], int(cfg["points"]))
 
-    records: list[dict[str, Any]] = []
-    curves: list[dict[str, Any]] = []
-    for offset in args.offsets:
-        params = parameters_with_symmetric_com_offset(float(offset), base_params)
+    regimes: list[str] = []
+    offsets: list[float] = []
+    d_stars: list[float] = []
+    rhos: list[float] = []
+    stables: list[bool] = []
+    output_errors: list[np.ndarray] = []
+
+    for spec in cfg["offset_specs"]:
+        offset = float(spec["offset"])
+        params = parameters_with_symmetric_com_offset(offset, base_params)
         model = TwoLinkBrachiationModel(params)
         p_map = make_passive_brachiation_stride_map(
-            model=model,
-            slope=slope,
-            dt=dt,
-            t_max=t_max,
-            collision_mode=CollisionMode.FULL_GRAB_1D,
-            initial_direction=-1.0,
-            impact_direction=1.0,
-            branch=branch,
-            support_point=support,
-            switch_policy=_switch_policy,
+            model=model, slope=slope, dt=cfg["dt"], t_max=cfg["t_max"],
+            collision_mode=CollisionMode.FULL_GRAB_1D, initial_direction=-1.0, impact_direction=1.0,
+            branch=branch, support_point=support, switch_policy=_switch_policy,
         )
         feasibility = make_passive_brachiation_feasibility_check(params, dim=1)
         roots, _ = find_fixed_points_1d(
-            p_map,
-            bounds=d_bounds,
-            num_scan_points=args.root_scan_points,
-            feasibility_check=feasibility,
-            residual_tol=args.root_residual_tol,
+            p_map, bounds=d_bounds, num_scan_points=cfg["root_scan_points"],
+            feasibility_check=feasibility, residual_tol=cfg["root_residual_tol"],
         )
-        print(f"offset {offset:+.5f}: {len(roots)} root(s)")
-        for root_idx, root in enumerate(roots):
+
+        def rho_of(x):
+            _, _, rho = poincare_jacobian_eigenvalues_1d(
+                p_map, x, delta=cfg["jacobian_delta"], feasibility_check=feasibility
+            )
+            return rho
+
+        picked = _pick_root(roots, rho_of, spec["regime"])
+        if picked is None:
+            continue
+        root, rho = picked
+        d_star = float(root.x)
+        d_input = np.clip(d_star + error_grid, d_bounds[0], d_bounds[1])
+        out_err = np.full(error_grid.shape, np.nan, dtype=float)
+        for i, d_value in enumerate(d_input):
             try:
-                eig, _jac, rho = poincare_jacobian_eigenvalues_1d(
-                    p_map,
-                    root.x,
-                    delta=args.jacobian_delta,
-                    feasibility_check=feasibility,
+                evaluation = evaluate_passive_brachiation_stride(
+                    model=model, slope=slope, x=np.array([d_value], dtype=float), dt=cfg["dt"], t_max=cfg["t_max"],
+                    collision_mode=CollisionMode.FULL_GRAB_1D, initial_direction=-1.0, impact_direction=1.0,
+                    branch=branch, support_point=support, switch_policy=_switch_policy, stop_after_releases=1,
                 )
-                eig_real = float(np.real(np.ravel(eig)[0]))
-                rho = float(rho)
+                out_err[i] = float(evaluation.p_of_x[0]) - d_star
             except Exception:
-                eig_real = float("nan")
-                rho = float("nan")
-            stable = bool(np.isfinite(rho) and rho < 1.0)
-            d_star = float(root.x)
-            error_grid = np.linspace(
-                -args.error_half_width,
-                args.error_half_width,
-                args.points,
-            )
-            d_input = np.clip(d_star + error_grid, d_bounds[0], d_bounds[1])
-            d_input = np.unique(np.r_[d_input, d_star])
-            d_input.sort()
-            input_error = d_input - d_star
-            output_error = np.full_like(input_error, np.nan, dtype=float)
-            valid = np.zeros_like(input_error, dtype=bool)
-            for i, d_value in enumerate(d_input):
-                try:
-                    evaluation = evaluate_passive_brachiation_stride(
-                        model=model,
-                        slope=slope,
-                        x=np.array([d_value], dtype=float),
-                        dt=dt,
-                        t_max=t_max,
-                        collision_mode=CollisionMode.FULL_GRAB_1D,
-                        initial_direction=-1.0,
-                        impact_direction=1.0,
-                        branch=branch,
-                        support_point=support,
-                        switch_policy=_switch_policy,
-                        stop_after_releases=1,
-                    )
-                    output_error[i] = float(evaluation.p_of_x[0]) - d_star
-                    valid[i] = np.isfinite(output_error[i])
-                except Exception:
-                    pass
+                pass
 
-            record = {
-                "offset": float(offset),
-                "root_index": int(root_idx),
-                "d_star": d_star,
-                "rho": rho,
-                "eigen_real": eig_real,
-                "stable": stable,
-                "valid_points": int(np.count_nonzero(valid)),
-            }
-            records.append(record)
-            curves.append(
-                {
-                    **record,
-                    "input_error": input_error,
-                    "output_error": output_error,
-                    "valid": valid,
-                }
-            )
-            label = "stable" if stable else "unstable"
-            print(
-                f"  root {root_idx}: d*={d_star:.6f}, "
-                f"rho={rho:.4f}, eig={eig_real:+.4f}, {label}"
-            )
+        regimes.append(spec["regime"])
+        offsets.append(offset)
+        d_stars.append(d_star)
+        rhos.append(float(rho))
+        stables.append(bool(np.isfinite(rho) and rho < 1.0))
+        output_errors.append(out_err)
 
-    if not curves:
+    if not output_errors:
         raise RuntimeError("No fixed-point roots found for the requested COM offsets.")
 
-    if args.representative_roots:
-        selected_curves: list[dict[str, Any]] = []
-        for offset in args.offsets:
-            here = [curve for curve in curves if abs(curve["offset"] - float(offset)) < 1e-12]
-            if not here:
-                continue
-            offset_value = float(offset)
-            if offset_value > 0.0:
-                # Clearly stable reference: strongest contraction.
-                chosen = min(here, key=lambda curve: curve["rho"])
-            elif offset_value <= -0.35:
-                # Clearly unstable reference: closest unstable root to |lambda|=1.
-                unstable = [curve for curve in here if not curve["stable"]]
-                chosen = min(unstable or here, key=lambda curve: abs(curve["rho"] - 1.0))
-            else:
-                # Near-critical reference: closest root to |lambda|=1 on either side.
-                chosen = min(here, key=lambda curve: abs(curve["rho"] - 1.0))
-            selected_curves.append(chosen)
-        curves = selected_curves
-        records = [
-            {
-                key: curve[key]
-                for key in (
-                    "offset",
-                    "root_index",
-                    "d_star",
-                    "rho",
-                    "eigen_real",
-                    "stable",
-                    "valid_points",
-                )
-            }
-            for curve in curves
-        ]
+    arrays = {
+        "regime": np.array(regimes, dtype="U16"),
+        "offset": np.array(offsets, dtype=float),
+        "d_star": np.array(d_stars, dtype=float),
+        "spectral_radius": np.array(rhos, dtype=float),
+        "stable": np.array(stables, dtype=bool),
+        "input_error": error_grid,
+        "output_error": np.vstack(output_errors),
+    }
+    summary = {
+        "gamma_deg": cfg["gamma_deg"],
+        "branch": branch,
+        "curve_count": len(regimes),
+        "regimes": regimes,
+        "offsets": offsets,
+        "d_stars": d_stars,
+        "spectral_radii": rhos,
+    }
+    return arrays, summary
 
+
+def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Figure]:
+    import matplotlib.pyplot as plt
+
+    x = arrays["input_error"].astype(float)
+    output_error = arrays["output_error"]
+    regimes = arrays["regime"]
+    offsets = arrays["offset"].astype(float)
+    d_stars = arrays["d_star"].astype(float)
+    rhos = arrays["spectral_radius"].astype(float)
+    stables = arrays["stable"].astype(bool)
+
+    colors = {
+        "most_stable": "tab:green",
+        "near_unstable_stable": "tab:orange",
+        "unstable": "tab:red",
+        "custom": "tab:blue",
+    }
     fig, ax = plt.subplots(figsize=(9.5, 7))
-    all_errors = []
-    colors = plt.get_cmap("tab10")
-    for idx, curve in enumerate(curves):
-        valid = curve["valid"]
+    all_errors = [cfg["error_half_width"]]
+    for i in range(len(regimes)):
+        y = output_error[i]
+        valid = np.isfinite(y)
         if not np.any(valid):
             continue
-        x = curve["input_error"][valid]
-        y = curve["output_error"][valid]
-        all_errors.extend(np.abs(x))
-        all_errors.extend(np.abs(y))
-        linestyle = "-" if curve["stable"] else "--"
-        color = colors(idx % 10)
+        all_errors.extend(np.abs(y[valid]))
+        regime = str(regimes[i])
         ax.plot(
-            x,
-            y,
-            linestyle=linestyle,
+            x[valid], y[valid],
+            linestyle="-" if stables[i] else "--",
             linewidth=2.0,
-            color=color,
-            label=(
-                f"x={curve['offset']:+.4f}, d*={curve['d_star']:.3f}, "
-                f"rho={curve['rho']:.2f}, {'S' if curve['stable'] else 'U'}"
-            ),
+            color=colors.get(regime, "tab:blue"),
+            label=f"{regime}: x={offsets[i]:+.4f}, d*={d_stars[i]:.3f}, rho={rhos[i]:.2f}",
         )
 
     limit = 1.05 * max(max(all_errors), 1e-6)
-    ax.plot(
-        [-limit, limit],
-        [-limit, limit],
-        color="black",
-        linestyle=":",
-        linewidth=1.2,
-        label="no correction: e_{n+1}=e_n",
-    )
+    ax.plot([-limit, limit], [-limit, limit], color="black", linestyle=":", linewidth=1.2, label="no correction: e_{n+1}=e_n")
     ax.axhline(0.0, color="0.45", linewidth=1.0)
     ax.axvline(0.0, color="0.45", linewidth=1.0)
     ax.set_xlim(-limit, limit)
@@ -300,60 +258,78 @@ def main() -> int:
     ax.set_xlabel("input error e_n = d_n - d* [m]")
     ax.set_ylabel("output error e_{n+1} = P(d_n) - d* [m]")
     ax.set_title(
-        "One-step stride error maps for different COM offsets\n"
-        f"mass fixed: {mass_target}={mass_value:.4f} kg, gamma={gamma_deg:.1f} deg"
+        "One-step stride error maps for most-stable / near-unstable-stable / unstable COM offsets\n"
+        f"gamma={summary['gamma_deg']:.1f} deg, branch={summary['branch']}"
     )
     ax.grid(True, alpha=0.3)
     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=8)
     fig.tight_layout()
+    return {"main": fig}
 
-    output_npz = args.results_dir / f"{args.output_prefix}_latest.npz"
-    output_json = args.results_dir / f"{args.output_prefix}_latest.json"
-    output_png = args.results_dir / f"{args.output_prefix}_latest.png"
-    fig.savefig(output_png, dpi=180)
-    plt.close(fig)
 
-    config = {
-        key: str(value) if isinstance(value, Path) else value
-        for key, value in vars(args).items()
+def run(
+    params: dict[str, Any] | None = None,
+    *,
+    force: bool = False,
+    results_dir: Path | str = Path("results"),
+    verbose: bool = True,
+) -> PartResult:
+    cfg = {**DEFAULTS, **(params or {})}
+    setup = load_best_com_setup(results_dir=results_dir)
+    bp = setup.base_params
+
+    if cfg["offsets"] is None:
+        offset_specs = _select_offsets(Path(results_dir) / "com_sweep_latest.npz")
+    else:
+        offset_specs = [{"regime": "custom", "offset": float(value)} for value in cfg["offsets"]]
+
+    cfg.update(
+        {
+            "_algo": ALGO_VERSION,
+            "offset_specs": offset_specs,
+            "gamma_deg": setup.gamma_deg,
+            "branch": setup.branch,
+            "m1": bp.m1, "m2": bp.m2, "l1": bp.l1, "l2": bp.l2,
+            "damping1": bp.damping1, "damping2": bp.damping2, "gravity": bp.gravity,
+            "source_com": setup.source,
+        }
+    )
+    cfg.pop("offsets", None)
+    return cached_run(
+        part=PART, config=cfg, compute=_compute, plot=_plot,
+        results_dir=results_dir, force=force, verbose=verbose,
+    )
+
+
+def _parse_offsets(value: str) -> list[float]:
+    return [float(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Draw one-step stride error maps for most-stable/near-unstable-stable/unstable COM offsets.")
+    parser.add_argument("--offsets", type=_parse_offsets, default=None, help="Comma-separated COM offsets; default auto-picks 3 regimes.")
+    parser.add_argument("--points", type=int, default=DEFAULTS["points"])
+    parser.add_argument("--error-half-width", type=float, default=DEFAULTS["error_half_width"])
+    parser.add_argument("--dt", type=float, default=DEFAULTS["dt"])
+    parser.add_argument("--t-max", type=float, default=DEFAULTS["t_max"])
+    parser.add_argument("--results-dir", type=Path, default=Path("results"))
+    parser.add_argument("--force", action="store_true")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    params = {
+        "offsets": args.offsets,
+        "points": args.points,
+        "error_half_width": args.error_half_width,
+        "dt": args.dt,
+        "t_max": args.t_max,
     }
-    config["offsets"] = [float(value) for value in args.offsets]
-    summary = {
-        "mass_result": str(args.mass_result),
-        "mass_target": mass_target,
-        "mass_value": mass_value,
-        "gamma_deg": gamma_deg,
-        "branch": branch,
-        "offsets": [float(value) for value in args.offsets],
-        "root_count": len(records),
-        "stable_root_count": int(sum(row["stable"] for row in records)),
-        "unstable_root_count": int(sum(not row["stable"] for row in records)),
-        "plot_path": str(output_png),
-    }
-    np.savez_compressed(
-        output_npz,
-        config_json=np.array(json.dumps(config, sort_keys=True), dtype="U"),
-        summary_json=np.array(json.dumps(summary, sort_keys=True), dtype="U"),
-        offset=np.array([row["offset"] for row in records], dtype=float),
-        root_index=np.array([row["root_index"] for row in records], dtype=int),
-        d_star=np.array([row["d_star"] for row in records], dtype=float),
-        spectral_radius=np.array([row["rho"] for row in records], dtype=float),
-        eigen_real=np.array([row["eigen_real"] for row in records], dtype=float),
-        stable=np.array([row["stable"] for row in records], dtype=bool),
-        valid_points=np.array([row["valid_points"] for row in records], dtype=int),
-    )
-    output_json.write_text(
-        json.dumps({"config": config, "summary": summary, "roots": records}, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    print(f"Wrote: {output_npz}")
-    print(f"Wrote: {output_json}")
-    print(f"Wrote: {output_png}")
-    print(
-        f"Roots: {summary['root_count']} total, "
-        f"{summary['stable_root_count']} stable, "
-        f"{summary['unstable_root_count']} unstable"
-    )
+    result = run(params, force=args.force, results_dir=args.results_dir)
+    print(f"Data: {result.data_path}")
+    print(f"Figure: {result.figure('main')}")
+    print(f"Curves: {result.summary['curve_count']} ({', '.join(result.summary['regimes'])})")
     return 0
 
 

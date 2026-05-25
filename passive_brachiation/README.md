@@ -71,7 +71,7 @@ result = newton_shoot(P, guesses[0].x, feasibility_check=check)
 The dynamics also expose default-zero disturbance interfaces:
 
 ```python
-params = BrachiationParameters.uniform_links(damping1=0.0, damping2=0.0)
+params = BrachiationParameters.rod_point_mass(damping1=0.0, damping2=0.0)
 
 def endpoint_force_policy(t, state):
     return np.zeros(2)  # [Fy, Fz] at the free endpoint

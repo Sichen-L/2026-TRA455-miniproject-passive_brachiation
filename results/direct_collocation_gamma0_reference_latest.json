@@ -1,0 +1,63 @@
+{
+  "config": {
+    "_algo": "v1",
+    "allow_illegal_reference": false,
+    "allow_unstable_reference": false,
+    "branch": "negative",
+    "com_offset": 0.38666666666666644,
+    "d_target": 0.5846703938339892,
+    "damping1": 0.0,
+    "damping2": 0.0,
+    "ftol": 1e-07,
+    "gamma": 0.0,
+    "gravity": 9.81,
+    "initial_speed_scale": 0.0,
+    "l1": 0.314,
+    "l2": 0.314,
+    "m1": 1.041,
+    "m2": 1.041,
+    "max_speed": 5.0,
+    "maxiter": 300,
+    "min_normal_speed": 0.0,
+    "nodes": 41,
+    "reference_dt": 0.005,
+    "reference_t_max": 8.0,
+    "root_maxiter": 60,
+    "root_rtol": 1e-10,
+    "root_xtol": 1e-10,
+    "source_com": "results\\com_sweep_latest.npz",
+    "speed_points": 41,
+    "state_weights": [
+      50.0,
+      50.0,
+      2.0,
+      2.0
+    ],
+    "theta_max_deg": 180.0,
+    "theta_min_deg": 0.0,
+    "theta_points": 37,
+    "torque_limit": 20.0,
+    "torque_weight": 1.0,
+    "tracking_weight": 1.0
+  },
+  "figures": {
+    "main": "direct_collocation_gamma0_reference_348e7110423e__main.png"
+  },
+  "hash": "348e7110423e",
+  "part": "direct_collocation_gamma0_reference",
+  "summary": {
+    "absolute_mechanical_work": 7.510792446691251,
+    "branch": "negative",
+    "com_offset": 0.38666666666666644,
+    "constraint_inf_norm": 1.2886225420061237e-10,
+    "d_target": 0.5846703938339892,
+    "gamma": 0.0,
+    "mechanical_work": 0.01802870863702344,
+    "objective": 179.37764230551554,
+    "reference_energy_J": 0.026986109894357534,
+    "source_com": "results\\com_sweep_latest.npz",
+    "success": true,
+    "torque_squared_integral": 7.995346331333708,
+    "tracking_rmse": 10.962250474432086
+  }
+}
