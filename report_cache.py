@@ -149,7 +149,7 @@ def cached_run(
     figures: dict[str, Path] = {}
     for name, fig in figs.items():
         fig_path = results_dir / _figure_filename(part, digest, name)
-        fig.savefig(fig_path, dpi=180)
+        fig.savefig(fig_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
         plt.close(fig)
         figures[name] = fig_path
 

@@ -29,24 +29,24 @@
         "regime": "unstable"
       }
     ],
-    "points": 21,
+    "points": 81,
     "root_residual_tol": 1e-06,
-    "root_scan_points": 20,
+    "root_scan_points": 90,
     "source_com": "results\\com_sweep_latest.npz",
-    "t_max": 4.0
+    "t_max": 8.0
   },
   "figures": {
-    "main": "com_stride_map_family_69544610b498__main.png"
+    "main": "com_stride_map_family_83eb2629728b__main.png"
   },
-  "hash": "69544610b498",
+  "hash": "83eb2629728b",
   "part": "com_stride_map_family",
   "summary": {
     "branch": "negative",
     "curve_count": 3,
     "d_stars": [
-      0.5846706241066867,
-      0.6116506602254901,
-      0.6116506602254901
+      0.5846706240685373,
+      0.6116506599436484,
+      0.6128831212365609
     ],
     "gamma_deg": 45.0,
     "offsets": [
@@ -60,9 +60,9 @@
       "unstable"
     ],
     "spectral_radii": [
-      0.00314816402946505,
-      0.6328723689996707,
-      0.6328723689996707
+      0.0031444898573873554,
+      0.6328723565318661,
+      1.4111706408748146
     ]
   }
 }

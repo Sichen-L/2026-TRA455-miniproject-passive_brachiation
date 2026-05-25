@@ -232,7 +232,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
         "unstable": "tab:red",
         "custom": "tab:blue",
     }
-    fig, ax = plt.subplots(figsize=(9.5, 7))
+    fig, ax = plt.subplots(figsize=(10.5, 7))
     all_errors = [cfg["error_half_width"]]
     for i in range(len(regimes)):
         y = output_error[i]
@@ -258,7 +258,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     ax.set_xlabel("input error e_n = d_n - d* [m]")
     ax.set_ylabel("output error e_{n+1} = P(d_n) - d* [m]")
     ax.set_title(
-        "One-step stride error maps for most-stable / near-unstable-stable / unstable COM offsets\n"
+        "Stride error maps: most-stable / near-unstable / unstable COM cases\n"
         f"gamma={summary['gamma_deg']:.1f} deg, branch={summary['branch']}"
     )
     ax.grid(True, alpha=0.3)

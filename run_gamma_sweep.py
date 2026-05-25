@@ -338,7 +338,16 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     switch_x = [0.5 * (x[i] + x[i + 1]) for i in range(len(states) - 1) if states[i] != states[i + 1]]
     for value in switch_x:
         ax.axvline(value, color="0.45", linestyle=":", linewidth=1.0)
-        ax.text(value, y_max + 0.02 * y_span, f"gamma={value:.2f}", rotation=90, ha="center", va="bottom", fontsize=8)
+        ax.annotate(
+            f"gamma={value:.2f}",
+            xy=(value, y_max),
+            xytext=(6, -12),
+            textcoords="offset points",
+            ha="left",
+            va="top",
+            fontsize=8,
+            color="0.35",
+        )
 
     fold_idx = np.where(fold_candidate & np.isfinite(fold_indicator))[0]
     if len(fold_idx):

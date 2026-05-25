@@ -38,7 +38,7 @@ from run_direct_collocation_gamma0_reference import (
 )
 
 PART = "ilqr_gamma0_reference"
-ALGO_VERSION = "v1"
+ALGO_VERSION = "v2"
 
 DEFAULTS: dict[str, Any] = {
     "gamma": 0.0,
@@ -237,6 +237,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "opt_total": opt_energy["total"],
         "power": ce["power"],
         "cumulative_work": ce["cumulative_work"],
+        "cumulative_abs_work": ce["cumulative_abs_work"],
         "residual_norm": residual_norm,
     }
     summary = {

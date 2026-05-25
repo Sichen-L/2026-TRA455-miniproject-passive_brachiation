@@ -181,11 +181,12 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     axes[1, 0].legend(loc="best")
 
     stride = arrays["release_stride"]
-    axes[1, 1].plot(np.arange(1, len(stride) + 1), stride, "o-", label="release stride")
-    axes[1, 1].axhline(summary["d_fixed"], color="black", linestyle="--", linewidth=1, label="fixed d")
+    stride_error = stride - summary["d_fixed"]
+    axes[1, 1].plot(np.arange(1, len(stride_error) + 1), stride_error, "o-", label="release stride - fixed d")
+    axes[1, 1].axhline(0.0, color="black", linestyle="--", linewidth=1, label="fixed point")
     axes[1, 1].set_xlabel("release index")
-    axes[1, 1].set_ylabel("stride distance [m]")
-    axes[1, 1].set_title("fixed-point stride repeatability")
+    axes[1, 1].set_ylabel("stride error [m]")
+    axes[1, 1].set_title("fixed-point stride repeatability error")
     axes[1, 1].legend(loc="best")
 
     fig.suptitle(

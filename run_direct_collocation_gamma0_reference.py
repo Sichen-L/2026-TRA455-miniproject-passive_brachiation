@@ -39,7 +39,7 @@ from report_setup import load_best_com_setup
 from run_free_initial_velocity_gamma_sweep import FreeVelocityProblem, scan_gamma, select_candidate
 
 PART = "direct_collocation_gamma0_reference"
-ALGO_VERSION = "v1"
+ALGO_VERSION = "v2"
 
 DEFAULTS: dict[str, Any] = {
     "gamma": 0.0,
@@ -148,13 +148,19 @@ def energy_series(model, x_nodes) -> dict[str, np.ndarray]:
 def control_energy(time_grid, x_nodes, u_nodes) -> dict[str, Any]:
     dt = np.diff(time_grid)
     power = u_nodes * x_nodes[:, 3]
+    abs_power = np.abs(power)
     effort = float(np.sum(0.5 * dt * (u_nodes[:-1] ** 2 + u_nodes[1:] ** 2)))
     work = float(np.sum(0.5 * dt * (power[:-1] + power[1:])))
-    abs_work = float(np.sum(0.5 * dt * (np.abs(power[:-1]) + np.abs(power[1:]))))
+    abs_work = float(np.sum(0.5 * dt * (abs_power[:-1] + abs_power[1:])))
+    # Net mechanical work on the system (signed; positive and negative cancel).
     cumulative = np.concatenate(([0.0], np.cumsum(0.5 * dt * (power[:-1] + power[1:]))))
+    # Actuator energy consumed: the motor spends energy whenever it acts, so
+    # braking (negative power) counts as expenditure too -> integral of |power|.
+    cumulative_abs = np.concatenate(([0.0], np.cumsum(0.5 * dt * (abs_power[:-1] + abs_power[1:]))))
     return {
         "power": power,
         "cumulative_work": cumulative,
+        "cumulative_abs_work": cumulative_abs,
         "torque_squared_integral": effort,
         "mechanical_work": work,
         "absolute_mechanical_work": abs_work,
@@ -210,6 +216,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "opt_total": opt_energy["total"],
         "power": ce["power"],
         "cumulative_work": ce["cumulative_work"],
+        "cumulative_abs_work": ce["cumulative_abs_work"],
         "residual_norm": residual_norm,
     }
     summary = {
@@ -247,18 +254,19 @@ def _plot_tracking(arrays, summary, cfg, method_label: str) -> Figure:
     axes[0, 1].plot(t, arrays["opt_total"], color="tab:green", label=f"{method_label} total")
     axes[0, 1].set_ylabel("system energy [J]")
     axes[0, 1].set_title("system energy")
-    axes[0, 1].legend(loc="best", fontsize=8)
+    axes[0, 1].legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0, fontsize=7)
 
     axes[1, 0].plot(t, arrays["residual_norm"], color="tab:purple", linewidth=1.8)
     axes[1, 0].set_ylabel("state residual ||x - x_ref||")
     axes[1, 0].set_xlabel("time [s]")
     axes[1, 0].set_title("state residual")
 
-    axes[1, 1].plot(t, arrays["cumulative_work"], color="tab:orange", linewidth=1.8)
-    axes[1, 1].axhline(0.0, color="black", linestyle="--", linewidth=1)
-    axes[1, 1].set_ylabel("cumulative external work [J]")
+    axes[1, 1].plot(t, arrays["cumulative_abs_work"], color="tab:orange", linewidth=1.8, label="actuator energy (int |tau*qd|)")
+    axes[1, 1].plot(t, arrays["cumulative_work"], color="0.6", linewidth=1.2, linestyle="--", label="net work on system (int tau*qd)")
+    axes[1, 1].set_ylabel("cumulative energy [J]")
     axes[1, 1].set_xlabel("time [s]")
-    axes[1, 1].set_title("external (actuator) work")
+    axes[1, 1].set_title("actuator energy consumed")
+    axes[1, 1].legend(loc="best", fontsize=8)
 
     for ax in axes.ravel():
         ax.grid(True, alpha=0.25)

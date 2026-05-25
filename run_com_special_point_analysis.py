@@ -379,7 +379,6 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     target = np.abs(a_d - target_center) <= target_half_width
     xs_s, ds_s, rho_s = _sorted_xy(a_off[target & a_stable], a_d[target & a_stable], a_rho[target & a_stable])
     xs_u, ds_u, _ = _sorted_xy(a_off[target & ~a_stable], a_d[target & ~a_stable], a_rho[target & ~a_stable])
-    xs_o, ds_o, _ = _sorted_xy(a_off[~target], a_d[~target], a_rho[~target])
 
     fig2, ax = plt.subplots(figsize=(9.5, 6))
     colorbar_source = None
@@ -390,10 +389,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
             label="target stable arm (|lambda|<1)",
         )
     if len(xs_u):
-        ax.plot(xs_u, ds_u, "--", color="tab:red", linewidth=1.2, zorder=1)
         ax.scatter(xs_u, ds_u, marker="x", s=80, color="tab:red", linewidths=2, zorder=3, label="target unstable arm (|lambda|>1)")
-    if len(xs_o):
-        ax.scatter(xs_o, ds_o, marker="s", s=30, facecolors="none", edgecolors="0.5", zorder=2, label="other roots")
 
     nose = summary.get("fold_coexistence_min_offset")
     if nose is not None and len(xs_s):
@@ -402,15 +398,16 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
         ax.annotate(
             f"target arms coexist down to\noffset={nose:+.4f}\n(fold just beyond)",
             xy=(nose, nose_d),
-            xytext=(12, 20),
+            xytext=(34, -44),
             textcoords="offset points",
             arrowprops=dict(arrowstyle="->", color="black"),
             fontsize=9,
+            va="top",
         )
 
     ax.set_xlabel("symmetric COM offset")
     ax.set_ylabel("fixed stride distance d [m]")
-    ax.set_title("Fold near lower COM limit: target stable + unstable arms vs other roots")
+    ax.set_title("Fold near lower COM limit: target stable and unstable arms")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     if colorbar_source is not None:
