@@ -30,9 +30,11 @@ from report_cache import PartResult, cached_run
 from report_setup import load_best_com_setup
 from run_direct_collocation_gamma0_reference import (
     _plot_tracking,
+    animation_path,
     compute_gamma_candidate,
     control_energy,
     energy_series,
+    ensure_animation,
     passive_reference_samples,
     resample_reference,
 )
@@ -67,6 +69,8 @@ DEFAULTS: dict[str, Any] = {
     "root_xtol": 1e-10,
     "root_rtol": 1e-10,
     "root_maxiter": 60,
+    "gif_fps": 24,
+    "gif_frames": 90,
 }
 
 
@@ -277,7 +281,9 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
             "source_com": setup.source,
         }
     )
-    return cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    result = cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="iLQR", part=PART)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -286,6 +292,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes", type=int, default=DEFAULTS["nodes"])
     parser.add_argument("--initial-speed-scale", type=float, default=DEFAULTS["initial_speed_scale"])
     parser.add_argument("--torque-limit", type=float, default=DEFAULTS["torque_limit"])
+    parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
+    parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
     return parser
@@ -293,10 +301,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    params = {"gamma": args.gamma, "nodes": args.nodes, "initial_speed_scale": args.initial_speed_scale, "torque_limit": args.torque_limit}
+    params = {
+        "gamma": args.gamma,
+        "nodes": args.nodes,
+        "initial_speed_scale": args.initial_speed_scale,
+        "torque_limit": args.torque_limit,
+        "gif_fps": args.gif_fps,
+        "gif_frames": args.gif_frames,
+    }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")
     print(f"Figure: {result.figure('main')}")
+    print(f"Animation: {animation_path(result, results_dir=args.results_dir, part=PART)}")
     print(f"cost={result.summary['cost']:.6g} iterations={result.summary['iterations']} tracking_rmse={result.summary['tracking_rmse']:.3e}")
     return 0
 

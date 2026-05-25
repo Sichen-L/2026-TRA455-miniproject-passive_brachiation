@@ -16,6 +16,7 @@ Importable interface::
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from passive_brachiation import (
     Slope,
     SwitchDecision,
     TwoLinkBrachiationModel,
+    forward_kinematics,
     parameters_with_symmetric_com_offset,
     simulate,
 )
@@ -64,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
     "root_xtol": 1e-10,
     "root_rtol": 1e-10,
     "root_maxiter": 60,
+    "gif_fps": 24,
+    "gif_frames": 90,
 }
 
 
@@ -282,6 +286,110 @@ def _plot(arrays, summary, cfg) -> dict[str, Figure]:
     return {"main": _plot_tracking(arrays, summary, cfg, "direct collocation")}
 
 
+def animation_path(
+    result: PartResult | None = None,
+    *,
+    results_dir: Path | str = Path("results"),
+    latest: bool = True,
+    part: str = PART,
+) -> Path:
+    results_dir = Path(results_dir)
+    if result is None or latest:
+        return results_dir / f"{part}_latest__motion.gif"
+    return results_dir / f"{part}_{result.hash}__motion.gif"
+
+
+def _load_arrays(path: Path) -> dict[str, np.ndarray]:
+    data = np.load(path, allow_pickle=True)
+    return {name: np.asarray(data[name]) for name in data.files if not name.endswith("_json")}
+
+
+def _trajectory_points(x_nodes: np.ndarray, cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    support = np.zeros((len(x_nodes), 2), dtype=float)
+    elbow = np.zeros_like(support)
+    free = np.zeros_like(support)
+    for index, x in enumerate(x_nodes):
+        pts = forward_kinematics(x[:2], np.zeros(2, dtype=float), cfg["l1"], cfg["l2"])
+        support[index] = pts.support
+        elbow[index] = pts.elbow
+        free[index] = pts.free
+    return support, elbow, free
+
+
+def make_control_animation(arrays: dict[str, np.ndarray], cfg: dict[str, Any], path: Path, method_label: str) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    time = np.asarray(arrays["time"], dtype=float)
+    x_opt = np.asarray(arrays["x_opt"], dtype=float)
+    x_ref = np.asarray(arrays["x_ref"], dtype=float)
+    torque = np.asarray(arrays["u_elbow"], dtype=float)
+    support, elbow, free = _trajectory_points(x_opt, cfg)
+    _ref_support, ref_elbow, ref_free = _trajectory_points(x_ref, cfg)
+    frame_count = min(int(cfg.get("gif_frames", 90)), len(time))
+    frame_indices = np.unique(np.linspace(0, len(time) - 1, frame_count, dtype=int))
+
+    all_y = np.concatenate((support[:, 0], elbow[:, 0], free[:, 0], ref_elbow[:, 0], ref_free[:, 0]))
+    all_z = np.concatenate((support[:, 1], elbow[:, 1], free[:, 1], ref_elbow[:, 1], ref_free[:, 1], np.array([0.0])))
+    pad = 0.08
+    y_limits = (float(np.min(all_y) - pad), float(np.max(all_y) + pad))
+    z_limits = (float(np.min(all_z) - pad), float(np.max(all_z) + pad))
+    torque_span = float(np.max(torque) - np.min(torque))
+    torque_margin = max(1e-6, 0.08 * torque_span)
+
+    fig, axes = plt.subplots(1, 2, figsize=(8.8, 3.7))
+    ax_motion, ax_torque = axes
+    ax_motion.set_xlim(*y_limits)
+    ax_motion.set_ylim(*z_limits)
+    ax_motion.set_aspect("equal", adjustable="box")
+    ax_motion.axhline(0.0, color="0.35", linestyle="--", linewidth=1)
+    ax_motion.plot(ref_free[:, 0], ref_free[:, 1], color="0.65", linestyle="--", linewidth=1.0, label="reference free")
+    ax_motion.set_xlabel("y [m]")
+    ax_motion.set_ylabel("z [m]")
+    ax_motion.set_title(f"{method_label} motion")
+    link_line, = ax_motion.plot([], [], "-o", color="tab:purple", linewidth=2.0, markersize=4)
+    trace_line, = ax_motion.plot([], [], color="tab:orange", linewidth=1.0, alpha=0.8, label="optimized free")
+    time_text = ax_motion.text(0.02, 0.94, "", transform=ax_motion.transAxes, fontsize=8, va="top")
+    ax_motion.legend(loc="lower left", fontsize=7)
+
+    ax_torque.plot(time, torque, color="0.75", linewidth=1.0)
+    ax_torque.axhline(0.0, color="black", linestyle="--", linewidth=0.8)
+    torque_marker, = ax_torque.plot([], [], "o", color="tab:red", markersize=4)
+    ax_torque.set_xlim(float(time[0]), float(time[-1]))
+    ax_torque.set_ylim(float(np.min(torque) - torque_margin), float(np.max(torque) + torque_margin))
+    ax_torque.set_xlabel("time [s]")
+    ax_torque.set_ylabel("elbow torque [N m]")
+    ax_torque.set_title("torque")
+    for ax in axes:
+        ax.grid(True, alpha=0.25)
+
+    def update(frame_index: int):
+        idx = int(frame_indices[frame_index])
+        link_line.set_data([support[idx, 0], elbow[idx, 0], free[idx, 0]], [support[idx, 1], elbow[idx, 1], free[idx, 1]])
+        trace_line.set_data(free[: idx + 1, 0], free[: idx + 1, 1])
+        torque_marker.set_data([time[idx]], [torque[idx]])
+        time_text.set_text(f"t = {time[idx]:.3f} s")
+        return link_line, trace_line, torque_marker, time_text
+
+    anim = FuncAnimation(fig, update, frames=len(frame_indices), blit=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    anim.save(path, writer=PillowWriter(fps=int(cfg.get("gif_fps", 24))))
+    plt.close(fig)
+
+
+def ensure_animation(result: PartResult, *, results_dir: Path | str, force: bool, verbose: bool, method_label: str, part: str = PART) -> Path:
+    results_dir = Path(results_dir)
+    gif_path = animation_path(result, results_dir=results_dir, latest=False, part=part)
+    gif_alias = animation_path(result, results_dir=results_dir, latest=True, part=part)
+    if force or not gif_path.exists():
+        if verbose:
+            print(f"[{part}] writing animation {gif_path.name}...")
+        make_control_animation(_load_arrays(result.data_path), result.config, gif_path, method_label)
+    if gif_path.resolve() != gif_alias.resolve():
+        shutil.copy2(gif_path, gif_alias)
+    return gif_alias
+
+
 def run(params=None, *, force=False, results_dir: Path | str = Path("results"), verbose=True) -> PartResult:
     cfg = {**DEFAULTS, **(params or {})}
     setup = load_best_com_setup(results_dir=results_dir, branch_override=cfg.get("branch"))
@@ -297,7 +405,9 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
             "source_com": setup.source,
         }
     )
-    return cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    result = cached_run(part=PART, config=cfg, compute=_compute, plot=_plot, results_dir=results_dir, force=force, verbose=verbose)
+    ensure_animation(result, results_dir=results_dir, force=force, verbose=verbose, method_label="direct collocation")
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -306,6 +416,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes", type=int, default=DEFAULTS["nodes"])
     parser.add_argument("--initial-speed-scale", type=float, default=DEFAULTS["initial_speed_scale"])
     parser.add_argument("--torque-limit", type=float, default=DEFAULTS["torque_limit"])
+    parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
+    parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true")
     return parser
@@ -313,10 +425,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    params = {"gamma": args.gamma, "nodes": args.nodes, "initial_speed_scale": args.initial_speed_scale, "torque_limit": args.torque_limit}
+    params = {
+        "gamma": args.gamma,
+        "nodes": args.nodes,
+        "initial_speed_scale": args.initial_speed_scale,
+        "torque_limit": args.torque_limit,
+        "gif_fps": args.gif_fps,
+        "gif_frames": args.gif_frames,
+    }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")
     print(f"Figure: {result.figure('main')}")
+    print(f"Animation: {animation_path(result, results_dir=args.results_dir)}")
     print(f"success={result.summary['success']} objective={result.summary['objective']:.6g} tracking_rmse={result.summary['tracking_rmse']:.3e}")
     return 0
 

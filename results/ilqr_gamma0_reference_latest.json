@@ -1,6 +1,6 @@
 {
   "config": {
-    "_algo": "v1",
+    "_algo": "v2",
     "allow_illegal_reference": false,
     "allow_unstable_reference": false,
     "branch": "negative",
@@ -10,6 +10,8 @@
     "damping1": 0.0,
     "damping2": 0.0,
     "gamma": 0.0,
+    "gif_fps": 24,
+    "gif_frames": 90,
     "gravity": 9.81,
     "initial_speed_scale": 0.0,
     "l1": 0.314,
@@ -50,9 +52,9 @@
     "x_eps": 1e-05
   },
   "figures": {
-    "main": "ilqr_gamma0_reference_cf8101976048__main.png"
+    "main": "ilqr_gamma0_reference_30b981a25622__main.png"
   },
-  "hash": "cf8101976048",
+  "hash": "30b981a25622",
   "part": "ilqr_gamma0_reference",
   "summary": {
     "absolute_mechanical_work": 0.05095756162605382,

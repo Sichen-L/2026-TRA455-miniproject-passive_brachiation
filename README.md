@@ -15,6 +15,7 @@ Reusable report scripts:
 - `run_normal_velocity_gamma_continuation.py`
 - `run_normal_impulse_gamma_continuation.py`
 - `run_free_initial_velocity_gamma_sweep.py`
+- `run_gamma0_passive_reference.py`
 - `run_direct_collocation_gamma0_reference.py`
 - `run_ilqr_gamma0_reference.py`
 - `run_part9_partial_loss.py`
