@@ -1,8 +1,9 @@
-"""Part 8 prelude: passive gamma=0 reference rollout before control.
+"""Part 8 prelude: repeated velocity-assisted gamma=0 reference rollout.
 
 The part-8 controllers track the gamma=0 minimum-energy free-initial-velocity
-solution from part 7.  This script first visualizes that passive reference by
-rolling it out from release to the pre-impact instant with zero control.
+solution from part 7.  This script visualizes the equivalent repeated impulse
+reference: at the beginning of every stride, the system receives the same
+release velocity needed to maintain the target stride on the horizontal plane.
 
 Outputs:
 
@@ -30,20 +31,24 @@ from passive_brachiation import (
     BrachiationParameters,
     BrachiationState,
     CollisionMode,
+    CollisionContext,
     Slope,
     SwitchDecision,
+    SwitchResult,
     TwoLinkBrachiationModel,
+    compute_full_grab_collision_velocity,
+    forward_kinematics,
     parameters_with_symmetric_com_offset,
     samples_to_arrays,
     simulate,
 )
-from passive_brachiation.simulation import SimPhase
+from passive_brachiation.switching import switch_support
 from report_cache import PartResult, cached_run
 from report_setup import load_best_com_setup
 from run_free_initial_velocity_gamma_sweep import FreeVelocityProblem, scan_gamma, select_candidate
 
 PART = "gamma0_passive_reference"
-ALGO_VERSION = "v1"
+ALGO_VERSION = "v3"
 
 DEFAULTS: dict[str, Any] = {
     "gamma": 0.0,
@@ -60,8 +65,9 @@ DEFAULTS: dict[str, Any] = {
     "root_xtol": 1e-10,
     "root_rtol": 1e-10,
     "root_maxiter": 60,
+    "rollout_periods": 3,
     "gif_fps": 24,
-    "gif_frames": 90,
+    "gif_frames": 120,
     "animation_speed": 1.0,
 }
 
@@ -86,25 +92,66 @@ def compute_gamma_candidate(cfg: dict[str, Any], params: BrachiationParameters, 
     return selected, candidates
 
 
-def passive_preimpact_samples(model, slope, candidate, dt, t_max) -> list:
+def make_repeated_velocity_collision(model, target_qd: np.ndarray, periods: int):
+    event_counter = {"count": 0}
+
+    def collision_model(context: CollisionContext) -> SwitchResult:
+        if context.decision != SwitchDecision.SWITCH:
+            return SwitchResult(state=context.state, phase=context.decision)
+        if context.mass_matrix is None:
+            raise ValueError("Repeated velocity assist requires a mass matrix.")
+
+        qd_after = compute_full_grab_collision_velocity(
+            q=context.state.q,
+            qd_before=context.state.qd,
+            mass_matrix=context.mass_matrix,
+            l1=model.p.l1,
+            l2=model.p.l2,
+        )
+        collided = BrachiationState(
+            q=context.state.q.copy(),
+            qd=qd_after,
+            support_index=context.state.support_index,
+        )
+        pts = forward_kinematics(context.state.q, context.support_point, model.p.l1, model.p.l2)
+        switched = switch_support(
+            state=collided,
+            old_support=context.support_point,
+            elbow=pts.elbow,
+            new_support=context.collision_point,
+        )
+        event_counter["count"] += 1
+        qd_release = (
+            np.asarray(target_qd, dtype=float).copy()
+            if event_counter["count"] < int(periods)
+            else switched.qd.copy()
+        )
+        return SwitchResult(
+            state=BrachiationState(q=switched.q.copy(), qd=qd_release, support_index=switched.support_index),
+            phase=SwitchDecision.SWITCH,
+        )
+
+    return collision_model
+
+
+def velocity_assisted_rollout_samples(model, slope, candidate, dt, t_max, periods: int) -> list:
     initial_state = BrachiationState(
         q=np.asarray(candidate.q, dtype=float),
         qd=np.asarray(candidate.qd, dtype=float),
         support_index=0,
     )
-    samples = simulate(
+    return simulate(
         model=model,
         slope=slope,
         initial_state=initial_state,
         initial_support_point=np.zeros(2, dtype=float),
-        duration=t_max,
+        duration=max(t_max, (int(periods) + 1) * t_max),
         dt=dt,
         switch_policy=lambda *_args: SwitchDecision.SWITCH,
         collision_mode=CollisionMode.FULL_GRAB_1D,
-        stop_after_releases=1,
+        collision_model=make_repeated_velocity_collision(model, np.asarray(candidate.qd, dtype=float), int(periods)),
+        stop_after_releases=int(periods),
     )
-    impact_index = next((i for i, sample in enumerate(samples) if sample.phase == SimPhase.IMPACT), None)
-    return samples[: impact_index + 1] if impact_index is not None else samples
 
 
 def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
@@ -124,7 +171,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
     slope = Slope(gamma=np.deg2rad(cfg["gamma"]))
 
     candidate, candidates = compute_gamma_candidate(cfg, params, cfg["d_target"], branch)
-    samples = passive_preimpact_samples(model, slope, candidate, cfg["dt"], cfg["t_max"])
+    samples = velocity_assisted_rollout_samples(model, slope, candidate, cfg["dt"], cfg["t_max"], int(cfg["rollout_periods"]))
     history = samples_to_arrays(samples, slope=slope)
 
     arrays = {
@@ -141,11 +188,19 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "elbow_dist": np.asarray(history["elbow_dist"], dtype=float),
         "phase": np.asarray(history["phase"], dtype="U16"),
     }
+    release_count = int(np.count_nonzero(arrays["phase"] == "release"))
+    release_kinetic = arrays["kinetic"][arrays["phase"] == "release"]
+    assist_energy = np.r_[arrays["kinetic"][0], release_kinetic[: max(0, int(cfg["rollout_periods"]) - 1)]]
     summary = {
         "gamma": cfg["gamma"],
         "d_target": cfg["d_target"],
         "com_offset": cfg["com_offset"],
         "branch": branch,
+        "rollout_periods": int(cfg["rollout_periods"]),
+        "release_count": release_count,
+        "assist_energy_per_cycle_J": assist_energy.astype(float).tolist(),
+        "assist_energy_mean_J": float(np.mean(assist_energy)) if assist_energy.size else float("nan"),
+        "assist_energy_total_J": float(np.sum(assist_energy)) if assist_energy.size else 0.0,
         "candidate_count": len(candidates),
         "reference_energy_J": float(candidate.energy),
         "theta_deg": float(candidate.theta_deg),
@@ -171,6 +226,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     t = arrays["time"]
     q = arrays["q"]
     qd = arrays["qd"]
+    phase = arrays["phase"]
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 7))
     axes[0, 0].plot(t, np.rad2deg(q[:, 0]), label="q1")
@@ -189,7 +245,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
     axes[1, 0].plot(t, arrays["total"], color="tab:green", linestyle="--", label="total")
     axes[1, 0].set_xlabel("time [s]")
     axes[1, 0].set_ylabel("energy [J]")
-    axes[1, 0].set_title("passive energy")
+    axes[1, 0].set_title("energy with repeated velocity assist")
     axes[1, 0].legend(fontsize=8)
 
     axes[1, 1].plot(arrays["support"][:, 0], arrays["support"][:, 1], "o", color="black", markersize=4, label="support")
@@ -206,9 +262,14 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
 
     for ax in axes.ravel():
         ax.grid(True, alpha=0.25)
+    for ax in axes[0, :].ravel().tolist() + [axes[1, 0]]:
+        for value in t[phase == "impact"]:
+            ax.axvline(value, color="tab:red", alpha=0.18, linewidth=0.8)
+        for value in t[phase == "release"]:
+            ax.axvline(value, color="tab:green", alpha=0.18, linewidth=0.8)
     fig.suptitle(
-        f"Gamma=0 passive reference before control: "
-        f"K0={summary['kinetic_initial_J']:.3g} J, theta={summary['theta_deg']:.1f} deg, speed={summary['speed']:.3g} m/s"
+        f"Gamma=0 repeated velocity-assisted reference: {summary['release_count']} releases, "
+        f"mean assist={summary['assist_energy_mean_J']:.3g} J/cycle"
     )
     fig.tight_layout()
     return {"main": fig}
@@ -256,7 +317,7 @@ def _make_animation(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg:
     ax_motion.axhline(0.0, color="0.35", linestyle="--", linewidth=1)
     ax_motion.set_xlabel("y [m]")
     ax_motion.set_ylabel("z [m]")
-    ax_motion.set_title("gamma=0 passive swing")
+    ax_motion.set_title("gamma=0 velocity-assisted rollout")
     link_line, = ax_motion.plot([], [], "-o", color="tab:purple", linewidth=2.0, markersize=4)
     trace_line, = ax_motion.plot([], [], color="tab:orange", linewidth=1.0, alpha=0.7)
     time_text = ax_motion.text(0.02, 0.94, "", transform=ax_motion.transAxes, fontsize=8, va="top")
@@ -333,9 +394,10 @@ def run(params=None, *, force=False, results_dir: Path | str = Path("results"), 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Roll out and animate the gamma=0 passive reference before control.")
+    parser = argparse.ArgumentParser(description="Roll out and animate the gamma=0 repeated velocity-assisted reference.")
     parser.add_argument("--dt", type=float, default=DEFAULTS["dt"])
     parser.add_argument("--t-max", type=float, default=DEFAULTS["t_max"])
+    parser.add_argument("--rollout-periods", type=int, default=DEFAULTS["rollout_periods"])
     parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
     parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
     parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
@@ -349,6 +411,7 @@ def main() -> int:
     params = {
         "dt": args.dt,
         "t_max": args.t_max,
+        "rollout_periods": args.rollout_periods,
         "gif_fps": args.gif_fps,
         "gif_frames": args.gif_frames,
         "animation_speed": args.animation_speed,
@@ -357,7 +420,11 @@ def main() -> int:
     print(f"Data: {result.data_path}")
     print(f"Figure: {result.figure('main')}")
     print(f"Animation: {animation_path(result, results_dir=args.results_dir)}")
-    print(f"K0={result.summary['kinetic_initial_J']:.6g} J, duration={result.summary['duration_s']:.6g} s")
+    print(
+        f"K0={result.summary['kinetic_initial_J']:.6g} J, "
+        f"duration={result.summary['duration_s']:.6g} s, releases={result.summary['release_count']}, "
+        f"mean assist={result.summary['assist_energy_mean_J']:.6g} J/cycle"
+    )
     return 0
 
 

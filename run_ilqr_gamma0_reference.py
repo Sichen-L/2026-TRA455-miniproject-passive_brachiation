@@ -36,11 +36,12 @@ from run_direct_collocation_gamma0_reference import (
     energy_series,
     ensure_animation,
     passive_reference_samples,
+    periodic_control_rollout,
     resample_reference,
 )
 
 PART = "ilqr_gamma0_reference"
-ALGO_VERSION = "v2"
+ALGO_VERSION = "v5"
 
 DEFAULTS: dict[str, Any] = {
     "gamma": 0.0,
@@ -69,8 +70,9 @@ DEFAULTS: dict[str, Any] = {
     "root_xtol": 1e-10,
     "root_rtol": 1e-10,
     "root_maxiter": 60,
+    "rollout_periods": 3,
     "gif_fps": 24,
-    "gif_frames": 90,
+    "gif_frames": 120,
     "animation_speed": 1.0,
 }
 
@@ -227,6 +229,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
     ref_energy = energy_series(model, x_ref)
     opt_energy = energy_series(model, x_opt)
     ce = control_energy(time_grid, x_opt, node_controls)
+    rollout_arrays, rollout_summary = periodic_control_rollout(model, slope, x0, time_grid, x_opt, x_ref, node_controls, cfg)
     residual_norm = np.linalg.norm(x_opt - x_ref, axis=1)
     tracking_rmse = float(np.sqrt(np.mean(np.sum((x_opt - x_ref) ** 2, axis=1))))
     terminal_error_norm = float(np.linalg.norm(x_opt[-1] - x_ref[-1]))
@@ -244,6 +247,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "cumulative_work": ce["cumulative_work"],
         "cumulative_abs_work": ce["cumulative_abs_work"],
         "residual_norm": residual_norm,
+        **rollout_arrays,
     }
     summary = {
         "gamma": cfg["gamma"],
@@ -259,6 +263,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "absolute_mechanical_work": ce["absolute_mechanical_work"],
         "reference_energy_J": float(candidate.energy),
         "source_com": cfg.get("source_com", ""),
+        **rollout_summary,
     }
     return arrays, summary
 
@@ -296,6 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nodes", type=int, default=DEFAULTS["nodes"])
     parser.add_argument("--initial-speed-scale", type=float, default=DEFAULTS["initial_speed_scale"])
     parser.add_argument("--torque-limit", type=float, default=DEFAULTS["torque_limit"])
+    parser.add_argument("--rollout-periods", type=int, default=DEFAULTS["rollout_periods"])
     parser.add_argument("--gif-fps", type=int, default=DEFAULTS["gif_fps"])
     parser.add_argument("--gif-frames", type=int, default=DEFAULTS["gif_frames"])
     parser.add_argument("--animation-speed", type=float, default=DEFAULTS["animation_speed"])
@@ -311,6 +317,7 @@ def main() -> int:
         "nodes": args.nodes,
         "initial_speed_scale": args.initial_speed_scale,
         "torque_limit": args.torque_limit,
+        "rollout_periods": args.rollout_periods,
         "gif_fps": args.gif_fps,
         "gif_frames": args.gif_frames,
         "animation_speed": args.animation_speed,

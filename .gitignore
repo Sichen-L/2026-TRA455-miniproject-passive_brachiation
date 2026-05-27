@@ -5,3 +5,28 @@ __pycache__/
 archive/
 results/*_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
 results/normal_velocity_assist_44deg_summary.json
+
+# IEEE paper build/export artifacts
+report_ieee.aux
+report_ieee.log
+report_ieee.out
+report_ieee.toc
+report_ieee.synctex.gz
+report_ieee.pdf
+report_ieee.tex
+report_ieee_overleaf_*.zip
+
+# Regenerated report figure/cache outputs
+results/*_latest.*
+results/*_latest__*.*
+results/*_generated.png
+
+# Report-only figure generation scripts
+run_com_stride_basin_map.py
+run_direct_collocation_gamma0_min_effort.py
+run_fig1_energy_compare.py
+run_fig5_control_comparison.py
+run_fig6_partial_loss_summary.py
+run_p3bc_combined_scan.py
+run_parameter_scan_com_ceiling.py
+run_part9_keyframes.py

@@ -8,7 +8,7 @@ example:
 
 * most_stable            - stable row with the smallest spectral radius
 * near_unstable_stable   - stable companion root at the mildest unstable offset
-* unstable               - mildest unstable row (spectral radius just above 1)
+* unstable               - a separate lower-COM example beyond the fold
 
 Importable interface::
 
@@ -43,10 +43,11 @@ from report_cache import PartResult, cached_run
 from report_setup import load_best_com_setup
 
 PART = "com_stride_map_family"
-ALGO_VERSION = "v2"
+ALGO_VERSION = "v4"
 
 DEFAULTS: dict[str, Any] = {
     "offsets": None,  # None -> auto-pick stable / critical / unstable from the COM sweep
+    "unstable_offset": -0.21,
     "dt": 0.005,
     "t_max": 8.0,
     "points": 81,
@@ -63,7 +64,7 @@ def _switch_policy(_t, _state, _support_point, _impact_point, _slope):
     return SwitchDecision.SWITCH
 
 
-def _select_offsets(com_path: Path) -> list[dict[str, Any]]:
+def _select_offsets(com_path: Path, unstable_offset: float | None = None) -> list[dict[str, Any]]:
     data = np.load(com_path, allow_pickle=True)
     off = np.asarray(data["com_offset"], dtype=float)
     rho = np.asarray(data["spectral_radius"], dtype=float)
@@ -87,7 +88,7 @@ def _select_offsets(com_path: Path) -> list[dict[str, Any]]:
         specs.append({"regime": "near_unstable_stable", "offset": mild_unstable_offset})
         specs.append({
             "regime": "unstable",
-            "offset": mild_unstable_offset,
+            "offset": float(unstable_offset) if unstable_offset is not None else mild_unstable_offset,
         })
     elif base.any():
         base_indices = np.where(base)[0]
@@ -195,7 +196,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         raise RuntimeError("No fixed-point roots found for the requested COM offsets.")
 
     arrays = {
-        "regime": np.array(regimes, dtype="U16"),
+        "regime": np.array(regimes, dtype="U32"),
         "offset": np.array(offsets, dtype=float),
         "d_star": np.array(d_stars, dtype=float),
         "spectral_radius": np.array(rhos, dtype=float),
@@ -232,7 +233,7 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
         "unstable": "tab:red",
         "custom": "tab:blue",
     }
-    fig, ax = plt.subplots(figsize=(10.5, 7))
+    fig, ax = plt.subplots(figsize=(7.2, 5.6))
     all_errors = [cfg["error_half_width"]]
     for i in range(len(regimes)):
         y = output_error[i]
@@ -246,11 +247,11 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
             linestyle="-" if stables[i] else "--",
             linewidth=2.0,
             color=colors.get(regime, "tab:blue"),
-            label=f"{regime}: x={offsets[i]:+.4f}, d*={d_stars[i]:.3f}, rho={rhos[i]:.2f}",
+            label=f"{regime}: rho={rhos[i]:.3g}",
         )
 
     limit = 1.05 * max(max(all_errors), 1e-6)
-    ax.plot([-limit, limit], [-limit, limit], color="black", linestyle=":", linewidth=1.2, label="no correction: e_{n+1}=e_n")
+    ax.plot([-limit, limit], [-limit, limit], color="black", linestyle=":", linewidth=1.2, label="no correction")
     ax.axhline(0.0, color="0.45", linewidth=1.0)
     ax.axvline(0.0, color="0.45", linewidth=1.0)
     ax.set_xlim(-limit, limit)
@@ -262,7 +263,17 @@ def _plot(arrays: dict[str, np.ndarray], summary: dict[str, Any], cfg: dict[str,
         f"gamma={summary['gamma_deg']:.1f} deg, branch={summary['branch']}"
     )
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=8)
+    ax.legend(
+        loc="upper right",
+        fontsize=8.5,
+        frameon=True,
+        framealpha=0.94,
+        facecolor="white",
+        edgecolor="0.82",
+        borderpad=0.45,
+        labelspacing=0.35,
+        handlelength=2.2,
+    )
     fig.tight_layout()
     return {"main": fig}
 
@@ -279,7 +290,10 @@ def run(
     bp = setup.base_params
 
     if cfg["offsets"] is None:
-        offset_specs = _select_offsets(Path(results_dir) / "com_sweep_latest.npz")
+        offset_specs = _select_offsets(
+            Path(results_dir) / "com_sweep_latest.npz",
+            unstable_offset=cfg.get("unstable_offset"),
+        )
     else:
         offset_specs = [{"regime": "custom", "offset": float(value)} for value in cfg["offsets"]]
 

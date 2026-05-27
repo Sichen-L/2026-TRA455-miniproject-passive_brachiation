@@ -30,6 +30,7 @@ from passive_brachiation import (
     SwitchDecision,
     TwoLinkBrachiationModel,
     continue_fixed_point_branch,
+    continue_fixed_point_branch_adaptive,
     find_fixed_points_1d,
     make_passive_brachiation_feasibility_check,
     make_passive_brachiation_stride_map,
@@ -40,7 +41,7 @@ from passive_brachiation import (
 from report_cache import PartResult, cached_run
 
 PART = "com_special_point"
-ALGO_VERSION = "v2"
+ALGO_VERSION = "v5"
 
 DEFAULTS: dict[str, Any] = {
     "gamma_deg": 45.0,
@@ -52,10 +53,24 @@ DEFAULTS: dict[str, Any] = {
     "local_start": -0.19,
     "local_end": -0.205,
     "local_step": -0.00025,
+    "local_dense": True,
+    "local_dense_end": -0.193,
+    "local_dense_step": -5e-5,
+    "local_adaptive": False,
+    "local_initial_step": 5e-5,
+    "local_min_step": 1.25e-5,
+    "local_max_step": 5e-4,
+    "local_step_growth": 1.25,
+    "local_step_shrink": 0.5,
+    "local_easy_iterations": 3,
+    "local_hard_iterations": 7,
     "fold_tol": 7.5e-2,
     "arm_offset_start": -0.16,
     "arm_offset_end": -0.205,
     "arm_offset_step": -0.0025,
+    "arm_dense": True,
+    "arm_dense_start": -0.19,
+    "arm_dense_step": -5e-4,
     "arm_d_scan_points": 180,
     "root_residual_tol": 1e-6,
     "degenerate_rho": 50.0,
@@ -73,6 +88,56 @@ DEFAULTS: dict[str, Any] = {
     "damping2": 0.0,
     "gravity": 9.81,
 }
+
+
+def _offset_range(start: float, end: float, step: float) -> np.ndarray:
+    """Inclusive floating-point range with the sign inferred from the endpoints."""
+    if start == end:
+        return np.array([float(start)], dtype=float)
+    direction = 1.0 if end > start else -1.0
+    step_abs = abs(float(step))
+    values = []
+    current = float(start)
+    while direction * (end - current) >= -1e-12:
+        values.append(current)
+        current += direction * step_abs
+    if not np.isclose(values[-1], end):
+        values.append(float(end))
+    return np.array(values, dtype=float)
+
+
+def _make_local_offsets(cfg: dict[str, Any]) -> np.ndarray:
+    start = float(cfg["local_start"])
+    end = float(cfg["local_end"])
+    if not cfg.get("local_dense", True):
+        return _offset_range(start, end, cfg["local_step"])
+    dense_end = float(cfg["local_dense_end"])
+    if (start <= dense_end <= end) or (end <= dense_end <= start):
+        dense = _offset_range(start, dense_end, cfg["local_dense_step"])
+        coarse = _offset_range(dense_end, end, cfg["local_step"])
+        values: list[float] = []
+        for value in np.concatenate([dense, coarse]):
+            if not values or not np.isclose(value, values[-1]):
+                values.append(float(value))
+        return np.array(values, dtype=float)
+    return _offset_range(start, end, cfg["local_step"])
+
+
+def _make_arm_offsets(cfg: dict[str, Any]) -> np.ndarray:
+    start = float(cfg["arm_offset_start"])
+    end = float(cfg["arm_offset_end"])
+    if not cfg.get("arm_dense", True):
+        return _offset_range(start, end, cfg["arm_offset_step"])
+    dense_start = float(cfg["arm_dense_start"])
+    if (start <= dense_start <= end) or (end <= dense_start <= start):
+        coarse = _offset_range(start, dense_start, cfg["arm_offset_step"])
+        dense = _offset_range(dense_start, end, cfg["arm_dense_step"])
+        values: list[float] = []
+        for value in np.concatenate([coarse, dense]):
+            if not values or not np.isclose(value, values[-1]):
+                values.append(float(value))
+        return np.array(values, dtype=float)
+    return _offset_range(start, end, cfg["arm_offset_step"])
 
 
 def _base_params(cfg: dict[str, Any]) -> BrachiationParameters:
@@ -180,25 +245,52 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
     )
     seed_point = next(point for point in reversed(approach_result.points) if point.converged)
 
-    local_offsets = np.arange(cfg["local_start"], cfg["local_end"] + 0.5 * cfg["local_step"], cfg["local_step"])
-    local_result = continue_fixed_point_branch(
-        P_factory=make_stride_map_for_offset,
-        parameters=local_offsets,
-        x0=seed_point.x,
-        dim=1,
-        feasibility_factory=make_feasibility,
-        tol=1e-7,
-        max_iter=12,
-        delta=cfg["jacobian_delta"],
-        damping=0.8,
-        compute_stability=True,
-        stop_on_failure=False,
-    )
+    if cfg["local_adaptive"]:
+        local_result = continue_fixed_point_branch_adaptive(
+            P_factory=make_stride_map_for_offset,
+            start_parameter=cfg["local_start"],
+            target_parameter=cfg["local_end"],
+            x0=seed_point.x,
+            dim=1,
+            feasibility_factory=make_feasibility,
+            tol=1e-7,
+            max_iter=12,
+            delta=cfg["jacobian_delta"],
+            damping=0.8,
+            compute_stability=True,
+            initial_step=cfg["local_initial_step"],
+            min_step=cfg["local_min_step"],
+            max_step=cfg["local_max_step"],
+            step_growth=cfg["local_step_growth"],
+            step_shrink=cfg["local_step_shrink"],
+            easy_iterations=cfg["local_easy_iterations"],
+            hard_iterations=cfg["local_hard_iterations"],
+            fold_tolerance=cfg["fold_tol"],
+        )
+    else:
+        local_offsets = _make_local_offsets(cfg)
+        local_result = continue_fixed_point_branch(
+            P_factory=make_stride_map_for_offset,
+            parameters=local_offsets,
+            x0=seed_point.x,
+            dim=1,
+            feasibility_factory=make_feasibility,
+            tol=1e-7,
+            max_iter=12,
+            delta=cfg["jacobian_delta"],
+            damping=0.8,
+            compute_stability=True,
+            stop_on_failure=False,
+        )
 
     local_rows: list[dict[str, Any]] = []
+    previous_parameter: float | None = None
     for point in local_result.points:
         eig_real = np.nan if point.eigenvalues is None else float(np.real(point.eigenvalues[0]))
         fold_indicator = np.nan if point.fold_indicator is None else float(point.fold_indicator)
+        parameter_step = point.parameter_step
+        if parameter_step is None and previous_parameter is not None:
+            parameter_step = float(point.parameter) - previous_parameter
         local_rows.append(
             {
                 "offset": float(point.parameter),
@@ -207,9 +299,11 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
                 "eig_real": eig_real,
                 "rho": np.nan if point.spectral_radius is None else float(point.spectral_radius),
                 "fold_indicator": fold_indicator,
+                "parameter_step": np.nan if parameter_step is None else float(parameter_step),
                 "failure_reason": point.failure_reason,
             }
         )
+        previous_parameter = float(point.parameter)
     valid_rows = [row for row in local_rows if row["converged"]]
     if not valid_rows:
         raise RuntimeError("Local scan found no converged points.")
@@ -225,9 +319,23 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         "d_fixed": d_fixed,
         "branch": selected_branch,
         "period": selected_period,
+        "local_adaptive": bool(cfg["local_adaptive"]),
+        "local_stopped_early": bool(local_result.stopped_early),
+        "local_stop_reason": local_result.stop_reason,
         "local_points": len(local_rows),
         "local_converged": len(valid_rows),
     }
+    local_steps = np.array(
+        [abs(row["parameter_step"]) for row in local_rows if np.isfinite(row["parameter_step"]) and row["parameter_step"] != 0.0],
+        dtype=float,
+    )
+    if local_steps.size:
+        summary.update(
+            {
+                "local_step_min": float(np.min(local_steps)),
+                "local_step_max": float(np.max(local_steps)),
+            }
+        )
     if len(fine_offset) >= 2:
         eig_jump = np.abs(np.diff(fine_eig_real))
         eig_jump_idx = int(np.nanargmax(eig_jump))
@@ -257,9 +365,7 @@ def _compute(cfg: dict[str, Any]) -> tuple[dict[str, np.ndarray], dict[str, Any]
         for start, end in fail_runs
     ]
 
-    arm_offsets = np.arange(
-        cfg["arm_offset_start"], cfg["arm_offset_end"] + 0.5 * cfg["arm_offset_step"], cfg["arm_offset_step"]
-    )
+    arm_offsets = _make_arm_offsets(cfg)
     arm_records: list[dict[str, Any]] = []
     for offset in arm_offsets:
         p_map = make_stride_map_for_offset(float(offset))
@@ -444,6 +550,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dt", type=float, default=DEFAULTS["dt"])
     parser.add_argument("--t-max", type=float, default=DEFAULTS["t_max"])
     parser.add_argument("--target-branch-half-width", type=float, default=DEFAULTS["target_branch_half_width"])
+    parser.add_argument("--fixed-local-step", action="store_true", help="Use the legacy fixed-step local scan.")
+    parser.add_argument("--adaptive-local-step", action="store_true", help="Use Newton adaptive local continuation.")
+    parser.add_argument("--local-dense-end", type=float, default=DEFAULTS["local_dense_end"])
+    parser.add_argument("--local-dense-step", type=float, default=DEFAULTS["local_dense_step"])
+    parser.add_argument("--arm-dense-start", type=float, default=DEFAULTS["arm_dense_start"])
+    parser.add_argument("--arm-dense-step", type=float, default=DEFAULTS["arm_dense_step"])
+    parser.add_argument("--local-initial-step", type=float, default=DEFAULTS["local_initial_step"])
+    parser.add_argument("--local-min-step", type=float, default=DEFAULTS["local_min_step"])
+    parser.add_argument("--local-max-step", type=float, default=DEFAULTS["local_max_step"])
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--force", action="store_true", help="Recompute even if the cache exists.")
     return parser
@@ -456,6 +571,16 @@ def main() -> int:
         "dt": args.dt,
         "t_max": args.t_max,
         "target_branch_half_width": args.target_branch_half_width,
+        "local_adaptive": bool(args.adaptive_local_step and not args.fixed_local_step),
+        "local_dense": not args.fixed_local_step,
+        "local_dense_end": args.local_dense_end,
+        "local_dense_step": args.local_dense_step,
+        "arm_dense": not args.fixed_local_step,
+        "arm_dense_start": args.arm_dense_start,
+        "arm_dense_step": args.arm_dense_step,
+        "local_initial_step": args.local_initial_step,
+        "local_min_step": args.local_min_step,
+        "local_max_step": args.local_max_step,
     }
     result = run(params, force=args.force, results_dir=args.results_dir)
     print(f"Data: {result.data_path}")
